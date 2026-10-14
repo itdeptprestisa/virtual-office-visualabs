@@ -9,9 +9,11 @@
     "dev": "concurrently -n livekit,server,client -c yellow,magenta,cyan \"npm run dev:livekit\" \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w server && npm run build -w client",
     "dev:livekit": "livekit-server --dev --bind 0.0.0.0",
-    "test": "tsx --test shared/*.test.ts server/src/*.test.ts"
+    "test": "tsx --test shared/*.test.ts server/src/*.test.ts client/src/*.test.ts",
+    "test:e2e": "tsx --test e2e/*.test.ts"
   },
   "devDependencies": {
-    "concurrently": "^10.0.6"
+    "concurrently": "^10.0.6",
+    "puppeteer-core": "^25.13.0"
   }
 }

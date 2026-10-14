@@ -4,9 +4,10 @@ import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@re
 import { Vector3, type Group } from "three";
 import { Avatar } from "./Avatar";
 import { useKeyboard } from "./useKeyboard";
-import { doorPrimaryAction, remoteState, selfPos, sendDoor, sendMove, showNotice, useNet, type Vec3 } from "./net";
+import { changeFloor, doorPrimaryAction, remoteState, selfPos, sendDoor, sendMove, showNotice, useNet, type Vec3 } from "./net";
 import { PROXIMITY, doorNear, ejectPoint, seatNear, world as currentWorld, zoneAt, type Seat } from "./zones";
 import { ANIM, EMOTE_KEYS } from "./anims";
+import { t as tr } from "./i18n";
 import { updateProximity, useMedia } from "./media";
 import { pointerLock, touchInput } from "./input";
 
@@ -46,8 +47,11 @@ export function dampAngle(from: number, to: number, k: number) {
 let teleportImpl: ((x: number, z: number) => void) | null = null;
 let toggleSitImpl: (() => void) | null = null;
 
-/** Pindah ke dekat titik (x, z). Bila titik itu di meja terkunci orang lain, berhenti di luar mejanya. */
-export function teleportNear(x: number, z: number) {
+export const teleportTo = (x: number, z: number) => teleportImpl?.(x, z);
+
+/** Pindah ke dekat titik (x, z) — bila di lantai lain, naik lift dulu. */
+export function teleportNear(x: number, z: number, floor = useNet.getState().floor) {
+  if (floor !== useNet.getState().floor) changeFloor(floor, [x, 0, z]);
   const angle = Math.random() * Math.PI * 2;
   let tx = x + Math.cos(angle) * 1.1;
   let tz = z + Math.sin(angle) * 1.1;
@@ -175,12 +179,14 @@ export function Player() {
   const lastSent = useRef("");
   const lastValid = useRef<[number, number] | null>(null);
   const lastNotice = useRef(0);
+  const followStuck = useRef({ dist: Infinity, since: 0 });
 
   useFrame((state, dt) => {
     const b = body.current;
     const v = visual.current;
     if (!b || !v) return;
     const k = keys.current;
+    const now = state.clock.elapsedTime;
 
     if (k.has("KeyQ")) yaw.current += KEY_TURN_SPEED * dt;
     if (k.has("KeyE")) yaw.current -= KEY_TURN_SPEED * dt;
@@ -198,16 +204,46 @@ export function Player() {
     let z = -cy * fwd - sy * side;
     let len = Math.hypot(x, z);
     if (len < 0.15) len = 0; // zona mati joystick
-    const running = k.has("ShiftLeft") || k.has("ShiftRight") || Math.hypot(touchInput.x, touchInput.y) > 0.92;
+    let running = k.has("ShiftLeft") || k.has("ShiftRight") || Math.hypot(touchInput.x, touchInput.y) > 0.92;
+
+    // Mode ikuti: jalan otomatis ke orang yang diikuti; tombol gerak = berhenti mengikuti.
+    const following = useNet.getState().following;
+    if (following && len > 0) useNet.setState({ following: null });
+    else if (following) {
+      const target = remoteState.get(following);
+      const info = useNet.getState().players[following];
+      const here = b.translation();
+      if (!target || !info) useNet.setState({ following: null });
+      else if (info.floor !== useNet.getState().floor) {
+        teleportNear(target.p[0], target.p[2], info.floor); // ikut naik lift
+      } else {
+        const dx = target.p[0] - here.x;
+        const dz = target.p[2] - here.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 1.8) {
+          x = dx / dist;
+          z = dz / dist;
+          len = 1;
+          running = dist > 6;
+          // Tersangkut (dinding/furnitur) → lompat ke dekatnya.
+          if (dist >= followStuck.current.dist - 0.05) {
+            if (now - followStuck.current.since > 2.5) {
+              teleportNear(target.p[0], target.p[2]);
+              followStuck.current = { dist: Infinity, since: now };
+            }
+          } else followStuck.current = { dist, since: now };
+        }
+      }
+    }
     const speed = running ? RUN : WALK;
-    const now = state.clock.elapsedTime;
 
     // Duduk / berdiri (C). Bergerak saat duduk = berdiri.
     if (pressed.current.has("KeyC")) {
       pressed.current.delete("KeyC");
       toggleSitImpl?.();
     }
-    if (seat.current && len > 0) standUp();
+    if (seat.current && len > 0 && !following) standUp();
+    if (seat.current && following) useNet.setState({ following: null });
 
     // Emote (1/2/3) — dibatalkan begitu avatar bergerak.
     for (const code in EMOTE_KEYS) {
@@ -274,7 +310,7 @@ export function Player() {
       b.setLinvel({ x: 0, y: b.linvel().y, z: 0 }, true);
       if (now - lastNotice.current > 3) {
         lastNotice.current = now;
-        showNotice(`🔒 ${desks[blocked.id].ownerName} sedang mode fokus — jangan diganggu dulu ya`);
+        showNotice(`🔒 ${tr("{name} sedang mode fokus — jangan diganggu dulu ya", { name: desks[blocked.id].ownerName })}`);
       }
       t.x = ex;
       t.z = ez;
@@ -302,6 +338,8 @@ export function Player() {
       updateProximity(t.x, t.z);
       const near = seat.current ? null : (seatNear(t.x, t.z, seatTaken)?.id ?? null);
       if (useNet.getState().nearSeat !== near) useNet.setState({ nearSeat: near });
+      const lift = currentWorld().elevators.some((e) => Math.hypot(e.exit[0] - t.x, e.exit[1] - t.z) < 2.2);
+      if (useNet.getState().nearLift !== lift) useNet.setState({ nearLift: lift });
     }
 
     // Kirim posisi maks 15x/detik, hanya kalau berubah.

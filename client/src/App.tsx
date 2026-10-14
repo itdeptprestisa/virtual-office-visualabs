@@ -2,21 +2,25 @@ import { useEffect, useState } from "react";
 import { Scene } from "./Scene";
 import { boot, sendAvatar, sendStatus, useNet } from "./net";
 import { AvatarEditor } from "./avatar/AvatarEditor";
-import { connectMedia, room, toggleCam, toggleMic, useMedia } from "./media";
-import { ScreenPanel } from "./ScreenShare";
+import { connectMedia, room, setupPushToTalk, toggleCam, toggleMic, useMedia } from "./media";
+import { ScreenModal, ScreenPanel } from "./ScreenShare";
 import { WhiteboardModal } from "./WhiteboardView";
 import { requestBoard } from "./whiteboard";
-import { AuthScreen, FirstAvatarScreen, KickedScreen } from "./ui/AuthScreen";
+import { AuthScreen, FirstAvatarScreen, GuestScreen, KickedScreen } from "./ui/AuthScreen";
+import { BookingModal } from "./ui/BookingModal";
+import { TempPasswordModal } from "./ui/AdminPanel";
 import { ChatPanel } from "./ui/ChatPanel";
 import { MemberPanel, SummonPrompt } from "./ui/MemberPanel";
 import { SettingsModal } from "./ui/SettingsModal";
 import { AdminPanel } from "./ui/AdminPanel";
 import { EditorPanel } from "./ui/EditorPanel";
 import { Joystick } from "./ui/Joystick";
+import { t, useT } from "./i18n";
 import { ContextActions, HelpPanel, MediaBar, Notice, Toolbar, TopLeft, totalUnread, type Panel } from "./ui/Hud";
 
 // Ubah avatar di tengah permainan; perubahan langsung terlihat oleh semua orang.
 function AvatarModal({ onClose }: { onClose: () => void }) {
+  useT();
   const self = useNet((s) => s.self)!;
   const [avatar, setAvatar] = useState(self.avatar);
   return (
@@ -24,11 +28,11 @@ function AvatarModal({ onClose }: { onClose: () => void }) {
       <AvatarEditor
         value={avatar}
         onChange={setAvatar}
-        header={<h2 className="editor-header">Ubah avatar</h2>}
+        header={<h2 className="editor-header">{t("Ubah avatar")}</h2>}
         footer={
           <>
             <button type="button" className="secondary" onClick={onClose}>
-              Batal
+              {t("Batal")}
             </button>
             <button
               type="button"
@@ -38,7 +42,7 @@ function AvatarModal({ onClose }: { onClose: () => void }) {
                 onClose();
               }}
             >
-              Simpan
+              {t("Simpan")}
             </button>
           </>
         }
@@ -130,6 +134,9 @@ function Office() {
       {compact ? <Joystick /> : <HelpPanel />}
       <EditorPanel />
       <WhiteboardModal />
+      <BookingModal />
+      <ScreenModal />
+      <TempPasswordModal />
       {panel === "members" && <MemberPanel onClose={() => setPanel(null)} />}
       {panel === "admin" && <AdminPanel onClose={() => setPanel(null)} />}
       {panel === "settings" && <SettingsModal onClose={() => setPanel(null)} />}
@@ -139,19 +146,22 @@ function Office() {
 }
 
 export default function App() {
+  useT(); // render ulang seluruh UI saat bahasa diganti
   const phase = useNet((s) => s.phase);
   const hasSelf = useNet((s) => s.self !== null);
   useMediaConnection();
   useEffect(boot, []);
+  useEffect(setupPushToTalk, []);
 
   if (phase === "kicked") return <KickedScreen />;
   if (phase === "auth") return <AuthScreen />;
+  if (phase === "guest") return <GuestScreen />;
   if (phase === "avatar") return <FirstAvatarScreen />;
   // Saat menyambung ulang, kantor tetap ditampilkan (posisi & kamera dipertahankan).
   if (!hasSelf)
     return (
       <div className="overlay">
-        <p className="muted">{phase === "boot" ? "Memuat…" : "Masuk ke kantor…"}</p>
+        <p className="muted">{phase === "boot" ? t("Memuat…") : t("Masuk ke kantor…")}</p>
       </div>
     );
   return <Office />;

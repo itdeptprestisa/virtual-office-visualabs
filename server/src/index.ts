@@ -1,10 +1,22 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createReadStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { AccessToken } from "livekit-server-sdk";
 import { sanitizeAvatar } from "./avatar.js";
-import { db, dmKey, flush, pushCapped, save, type Stroke, type User } from "./store.js";
+import { UPLOAD_DIR, backup, db, dmKey, flush, pushCapped, save, type ChatMsg, type FileRef, type Stroke, type User } from "./store.js";
 import { SESSION_DAYS, USERNAME_RE, hashPassword, newId, newToken, verifyPassword } from "./auth.js";
 import { busyAt, fetchCalendar, type CalEvent } from "./calendar.js";
-import { PROXIMITY, defaultLayout, derive, sanitizeLayout, zoneIn, type Layout, type Zone } from "../../shared/layout.js";
+import {
+  PROXIMITY,
+  defaultLayout,
+  derive,
+  sanitizeLayout,
+  zoneIn,
+  type Derived,
+  type Layout,
+  type Zone,
+} from "../../shared/layout.js";
 
 try {
   process.loadEnvFile();
@@ -12,14 +24,19 @@ try {
   /* .env opsional */
 }
 
-// Protokol (JSON lewat WebSocket). Alur: login/register/resume → auth_ok → enter → welcome.
-//   client → server: login | register | resume | enter {avatar?, p?} | move | avatar | settings {name?, ical?} | logout
-//                    | chat {channel: area|umum, text} | dm {to, text} | dm_history {with} | status {manual, idle}
-//                    | summon {to} | hand {up} | mute_room | desk {action, id?} | door {id, action}
+// Protokol (JSON lewat WebSocket). Alur: login/register/resume/guest → auth_ok → enter → welcome.
+//   client → server: login | register | resume | guest {token,name} | enter {avatar?, p?} | move | floor {floor,p}
+//                    | avatar | settings {name?, ical?} | password {old,new} | logout
+//                    | chat {channel: area|umum, text, file?} | dm {to, text, file?} | dm_history {with}
+//                    | react {channel, id, emoji, with?} | search {q} | upload {req, name, mime, data}
+//                    | status {manual, idle} | summon {to} | hand {up} | mute_room | desk {action, id?} | door {id, action}
+//                    | book {room, title, start, end} | unbook {id} | screen_url {item, url}
 //                    | wb_open {room} | wb_stroke {room, stroke} | wb_clear {room} | layout {layout|reset} | admin {action, ...}
-//   server → client: auth_ok | auth_error | need_avatar | kicked | welcome | media | join | leave | player | state | world
-//                    | layout | directory | chat | dm | dm_history | summon | knock | mute_request | wb_state | wb_stroke
-//                    | wb_clear | admin_state | settings_ok | notice | full
+//   server → client: auth_ok | auth_error | need_avatar | kicked | welcome | media | join | leave | player | move_to | state
+//                    | world | layout | directory | chat | dm | dm_history | reaction | search_result | upload_ok | upload_error
+//                    | summon | knock | mute_request | bookings | screens | wb_state | wb_stroke | wb_clear
+//                    | admin_state | temp_password | settings_ok | password_ok | notice | full
+// HTTP: GET /files/<id>/<nama> (lampiran chat), GET /health.
 
 type Vec3 = [number, number, number];
 type Manual = "available" | "busy" | "away";
@@ -28,6 +45,8 @@ interface Player {
   id: string; // = id user
   user: User;
   ws: WebSocket;
+  token: string;
+  floor: string;
   p: Vec3;
   r: number;
   a: number;
@@ -44,6 +63,9 @@ const TICK_HZ = 15;
 const MAX_PLAYERS = 60;
 const WORLD_LIMIT = 50;
 const ANIM_COUNT = 7;
+const MAX_UPLOAD = 5 * 1024 * 1024; // 5 MB
+const INLINE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const REACTIONS = new Set(["👍", "❤️", "😂", "🎉", "👀", "🙏"]);
 
 // Default = `livekit-server --dev` lokal. Untuk LiveKit Cloud isi .env (lihat .env.example).
 // Tanpa LIVEKIT_URL, client memakai host halaman (port 7880) supaya tetap jalan dari perangkat lain di LAN.
@@ -58,11 +80,26 @@ async function mediaToken(id: string, name: string) {
   return at.toJwt();
 }
 
+// ---------- migrasi data lama ----------
+
+for (const m of db.umum) m.id ??= newId();
+for (const list of Object.values(db.dms)) for (const m of list) m.id ??= newId();
+mkdirSync(UPLOAD_DIR, { recursive: true });
+try {
+  backup();
+} catch (err) {
+  console.warn("Backup gagal:", err);
+}
+
 // ---------- denah & state dunia ----------
 
 let layout: Layout = (db.layout && sanitizeLayout(db.layout)) || defaultLayout();
-let derived = derive(layout);
-const zoneAt = (p: Vec3) => zoneIn(derived, p[0], p[2]);
+let derived: Record<string, Derived> = derive(layout);
+const firstFloor = () => layout.floors[0].id;
+const floorName = (id: string) => layout.floors.find((f) => f.id === id)?.name ?? id;
+const zoneAt = (floor: string, p: Vec3) => (derived[floor] ? zoneIn(derived[floor], p[0], p[2]) : null);
+const allZones = () => Object.values(derived).flatMap((d) => d.zones);
+const allRooms = () => layout.floors.flatMap((f) => f.rooms);
 
 interface DoorState {
   open: boolean;
@@ -72,8 +109,9 @@ const doors = new Map<string, DoorState>();
 const lockedDesks = new Set<string>(); // id zona meja yang sedang mode fokus (berlaku selama pemilik online)
 
 function syncDoors() {
-  for (const d of derived.doors) if (!doors.has(d.id)) doors.set(d.id, { open: true, locked: false });
-  for (const id of doors.keys()) if (!derived.doors.some((d) => d.id === id)) doors.delete(id);
+  const ids = Object.values(derived).flatMap((d) => d.doors.map((x) => x.id));
+  for (const id of ids) if (!doors.has(id)) doors.set(id, { open: true, locked: false });
+  for (const id of doors.keys()) if (!ids.includes(id)) doors.delete(id);
 }
 syncDoors();
 
@@ -83,9 +121,10 @@ const deskOf = (userId: string) => Object.entries(db.deskOwners).find(([, uid]) 
 
 function worldView() {
   const desks: Record<string, { ownerId: string; ownerName: string; locked: boolean; online: boolean }> = {};
+  const zones = allZones();
   for (const [deskId, ownerId] of Object.entries(db.deskOwners)) {
     const owner = userById(ownerId);
-    if (!owner || !derived.zones.some((z) => z.id === deskId)) continue;
+    if (!owner || !zones.some((z) => z.id === deskId)) continue;
     desks[deskId] = { ownerId, ownerName: owner.name, locked: lockedDesks.has(deskId), online: players.has(ownerId) };
   }
   return { t: "world", desks, doors: Object.fromEntries(doors) };
@@ -104,7 +143,7 @@ function statusOf(pl: Player): "available" | "busy" | "meeting" | "away" | "focu
   const myDesk = deskOf(pl.id);
   if (myDesk && lockedDesks.has(myDesk)) return "focus";
   if (calendarBusy.get(pl.id)) return "meeting";
-  if (pl.zone?.kind === "room") return "meeting";
+  if (pl.zone?.kind === "room" || pl.zone?.stage) return "meeting";
   if (pl.idle) return "away";
   return "available";
 }
@@ -123,6 +162,8 @@ function directory() {
         status: pl ? statusOf(pl) : "offline",
         calendar: pl ? !!calendarBusy.get(u.id) : false,
         zone: pl?.zone?.name ?? null,
+        floor: pl ? pl.floor : null,
+        floorName: pl ? floorName(pl.floor) : null,
         hand: pl?.hand ?? false,
       };
     });
@@ -144,19 +185,26 @@ function sendTo(filter: (pl: Player) => boolean, msg: unknown) {
 
 const broadcast = (msg: unknown, exceptId?: string) => sendTo((pl) => pl.id !== exceptId, msg);
 
-const publicView = (pl: Player) => ({ id: pl.id, name: pl.user.name, avatar: pl.user.avatar, p: pl.p, r: pl.r, a: pl.a });
+const publicView = (pl: Player) => ({ id: pl.id, name: pl.user.name, avatar: pl.user.avatar, floor: pl.floor, p: pl.p, r: pl.r, a: pl.a });
 
-const selfView = (u: User) => ({ id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar, ical: u.ical });
+const selfView = (u: User) => ({ id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar, ical: u.ical, guestExp: u.guestExp ?? null });
 
 function adminState() {
+  const now = Date.now();
   return {
     t: "admin_state",
     users: db.users.map((u) => ({ id: u.id, username: u.username, name: u.name, role: u.role, disabled: u.disabled, online: players.has(u.id) })),
     registration: db.settings.registration,
     inviteCode: db.settings.inviteCode,
+    guestLinks: Object.entries(db.guestLinks)
+      .filter(([, g]) => g.exp > now)
+      .map(([token, g]) => ({ token, label: g.label, exp: g.exp })),
   };
 }
 const pushAdminState = () => sendTo((pl) => pl.user.role === "admin", adminState());
+
+const upcomingBookings = () => db.bookings.filter((b) => b.end > Date.now() - 3600_000).sort((a, b) => a.start - b.start);
+const bookingsView = () => ({ t: "bookings", list: upcomingBookings() });
 
 // ---------- util ----------
 
@@ -170,9 +218,9 @@ function validVec3(v: unknown): Vec3 | null {
   return [clamp(v[0], WORLD_LIMIT), clamp(v[1], WORLD_LIMIT), clamp(v[2], WORLD_LIMIT)];
 }
 
-function createSession(userId: string) {
+function createSession(userId: string, exp = Date.now() + SESSION_DAYS * 86_400_000) {
   const token = newToken();
-  db.sessions[token] = { userId, exp: Date.now() + SESSION_DAYS * 86_400_000 };
+  db.sessions[token] = { userId, exp };
   save();
   return token;
 }
@@ -185,18 +233,75 @@ function sanitizeStroke(s: any): Stroke | null {
   return { id: s.id, color, width, pts: s.pts };
 }
 
+/** Lampiran chat: hanya file yang benar-benar pernah diunggah. */
+function fileRef(v: any): FileRef | undefined {
+  const f = v && typeof v.id === "string" ? db.files[v.id] : undefined;
+  return f ? { id: v.id, name: f.name, mime: f.mime, size: f.size } : undefined;
+}
+
+/** Siapa yang menerima chat "area" dari pengirim: satu area; panggung = seluruh lantai di luar ruangan; selain itu radius dekat. */
+function areaAudience(me: Player) {
+  const zone = me.zone;
+  return (pl: Player) => {
+    if (pl.floor !== me.floor) return false;
+    if (zone?.stage) return pl.zone?.kind !== "room" || pl.zone?.id === zone.id;
+    if (zone) return pl.zone?.id === zone.id;
+    return !pl.zone && Math.hypot(pl.p[0] - me.p[0], pl.p[2] - me.p[2]) <= PROXIMITY.hear + PROXIMITY.hysteresis;
+  };
+}
+
+function setZone(pl: Player) {
+  const z = zoneAt(pl.floor, pl.p);
+  if (z?.id !== pl.zone?.id) {
+    pl.zone = z;
+    markDirectory();
+  }
+}
+
+// ---------- HTTP: lampiran ----------
+
+function serveFile(req: IncomingMessage, res: ServerResponse) {
+  const m = req.url?.match(/^\/files\/([a-f0-9]{12,32})(?:\/[^?]*)?/);
+  const meta = m ? db.files[m[1]] : undefined;
+  const path = m ? resolve(UPLOAD_DIR, m[1]) : "";
+  if (!meta || !existsSync(path)) {
+    res.writeHead(404).end("Not found");
+    return;
+  }
+  const inline = INLINE_MIME.has(meta.mime);
+  res.writeHead(200, {
+    "Content-Type": inline ? meta.mime : "application/octet-stream",
+    "Content-Length": meta.size,
+    // File selain gambar selalu diunduh, tidak pernah dirender di origin ini (mencegah HTML/SVG berbahaya).
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name)}`,
+    "X-Content-Type-Options": "nosniff",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "private, max-age=31536000, immutable",
+  });
+  createReadStream(path).pipe(res);
+}
+
+const http = createServer((req, res) => {
+  if (req.url?.startsWith("/files/")) return serveFile(req, res);
+  if (req.url === "/health") return void res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
+  res.writeHead(404).end();
+});
+
 // ---------- koneksi ----------
 
-const wss = new WebSocketServer({ port: PORT });
+// Batas pesan > batas upload (base64 ±1,37×) supaya file kebesaran ditolak dengan pesan, bukan memutus koneksi.
+const wss = new WebSocketServer({ server: http, maxPayload: 12 * 1024 * 1024 });
 
 wss.on("connection", (ws) => {
   let authed: User | null = null;
+  let token = "";
   let me: Player | null = null;
   let attempts = 0;
 
-  const authOk = (u: User, token: string) => {
+  const authOk = (u: User, tok: string) => {
     authed = u;
-    send(ws, { t: "auth_ok", token, user: selfView(u) });
+    token = tok;
+    send(ws, { t: "auth_ok", token: tok, user: selfView(u) });
   };
   const authError = (reason: string) => send(ws, { t: "auth_error", reason });
 
@@ -219,16 +324,40 @@ wss.on("connection", (ws) => {
       }
       if (msg?.t === "login") {
         const u = db.users.find((x) => x.username === text(msg.username, 40).toLowerCase());
-        if (!u || !verifyPassword(String(msg.password ?? ""), u.salt, u.passHash)) return authError("Username atau password salah.");
+        if (!u || u.role === "guest" || !verifyPassword(String(msg.password ?? ""), u.salt, u.passHash)) return authError("Username atau password salah.");
         if (u.disabled) return authError("Akun ini dinonaktifkan admin.");
         return authOk(u, createSession(u.id));
+      }
+      if (msg?.t === "guest") {
+        const link = db.guestLinks[String(msg.token)];
+        const name = text(msg.name, 24);
+        if (!link || link.exp < Date.now()) return authError("Link tamu sudah tidak berlaku.");
+        if (!name) return authError("Nama wajib diisi.");
+        const u: User = {
+          id: newId(),
+          username: `tamu.${newId().slice(0, 5)}`,
+          name,
+          passHash: "",
+          salt: "",
+          role: "guest",
+          disabled: false,
+          avatar: null,
+          ical: null,
+          createdAt: Date.now(),
+          lastPos: null,
+          guestExp: link.exp,
+        };
+        db.users.push(u);
+        save();
+        pushAdminState();
+        return authOk(u, createSession(u.id, link.exp));
       }
       if (msg?.t === "register") {
         const username = text(msg.username, 40).toLowerCase();
         const password = String(msg.password ?? "");
         const name = text(msg.name, 24);
-        const first = db.users.length === 0;
-        if (!USERNAME_RE.test(username)) return authError("Username 3–20 karakter: huruf kecil, angka, titik, atau garis bawah.");
+        const first = !db.users.some((u) => u.role !== "guest");
+        if (!USERNAME_RE.test(username) || username.startsWith("tamu.")) return authError("Username 3–20 karakter: huruf kecil, angka, titik, atau garis bawah.");
         if (password.length < 6) return authError("Password minimal 6 karakter.");
         if (!name) return authError("Nama tampilan wajib diisi.");
         if (db.users.some((x) => x.username === username)) return authError("Username sudah dipakai.");
@@ -279,28 +408,32 @@ wss.on("connection", (ws) => {
         send(ws, { t: "full" });
         return ws.close();
       }
-      const spawn = validVec3(msg.p) ?? user.lastPos ?? randomSpawn();
-      const pl: Player = { id: user.id, user, ws, p: spawn, r: 0, a: 0, dirty: false, alive: true, manual: "available", idle: false, hand: false, zone: null };
-      pl.zone = zoneAt(pl.p);
+      const floor = layout.floors.some((f) => f.id === msg.floor) ? msg.floor : layout.floors.some((f) => f.id === user.lastFloor) ? user.lastFloor! : firstFloor();
+      const spawn = validVec3(msg.p) ?? (floor === user.lastFloor ? user.lastPos : null) ?? randomSpawn();
+      const pl: Player = { id: user.id, user, ws, token, floor, p: spawn, r: 0, a: 0, dirty: false, alive: true, manual: "available", idle: false, hand: false, zone: null };
+      pl.zone = zoneAt(pl.floor, pl.p);
       me = pl;
       players.set(pl.id, pl);
       save();
       send(ws, {
         t: "welcome",
         id: pl.id,
+        floor: pl.floor,
         spawn: pl.p,
         layout,
         players: [...players.values()].filter((o) => o !== pl).map(publicView),
         umum: db.umum.slice(-60),
       });
       send(ws, worldView());
+      send(ws, bookingsView());
+      send(ws, { t: "screens", map: db.screens });
       send(ws, { t: "directory", users: directory() });
       broadcast({ t: "join", player: publicView(pl) }, pl.id);
       broadcast(worldView(), pl.id);
       markDirectory();
       pushAdminState();
       mediaToken(pl.id, user.name)
-        .then((token) => send(ws, { t: "media", url: LIVEKIT_URL, token }))
+        .then((tok) => send(ws, { t: "media", url: LIVEKIT_URL, token: tok }))
         .catch((err) => console.error("Gagal membuat token LiveKit:", err));
       refreshCalendar(user);
       console.log(`+ ${user.name} (@${user.username}) — ${players.size} online`);
@@ -322,6 +455,7 @@ wss.on("connection", (ws) => {
 function dropPlayer(pl: Player) {
   players.delete(pl.id);
   pl.user.lastPos = pl.p;
+  pl.user.lastFloor = pl.floor;
   const myDesk = deskOf(pl.id);
   if (myDesk) lockedDesks.delete(myDesk); // mode fokus berakhir saat pemilik keluar
   save();
@@ -343,11 +477,21 @@ function handle(me: Player, msg: any) {
       me.r = msg.r;
       me.a = Number.isInteger(msg.a) && msg.a >= 0 && msg.a < ANIM_COUNT ? msg.a : 0;
       me.dirty = true;
-      const z = zoneAt(p);
-      if (z?.id !== me.zone?.id) {
-        me.zone = z;
-        markDirectory();
-      }
+      setZone(me);
+      return;
+    }
+    case "floor": {
+      // Naik lift: pindah lantai, muncul di titik keluar lift lantai tujuan.
+      const target = derived[String(msg.floor)];
+      if (!target || msg.floor === me.floor) return;
+      const lift = target.elevators[0];
+      me.floor = target.floorId;
+      me.p = validVec3(msg.p) ?? (lift ? [lift.exit[0], 0, lift.exit[1]] : randomSpawn());
+      me.zone = null;
+      setZone(me);
+      me.hand = false;
+      broadcast({ t: "player", id: me.id, floor: me.floor, p: me.p }, me.id);
+      markDirectory();
       return;
     }
     case "avatar": {
@@ -359,7 +503,7 @@ function handle(me: Player, msg: any) {
     case "settings": {
       const name = msg.name !== undefined ? text(msg.name, 24) : null;
       if (name) me.user.name = name;
-      if (msg.ical !== undefined) {
+      if (msg.ical !== undefined && me.user.role !== "guest") {
         const url = text(msg.ical, 500);
         me.user.ical = /^(https?|webcal):\/\//i.test(url) ? url : null;
         calendarBusy.delete(me.id);
@@ -373,32 +517,55 @@ function handle(me: Player, msg: any) {
       markDirectory();
       return;
     }
+    case "password": {
+      if (me.user.role === "guest") return;
+      const next = String(msg.new ?? "");
+      if (!verifyPassword(String(msg.old ?? ""), me.user.salt, me.user.passHash)) return send(me.ws, { t: "notice", text: "Password lama salah." });
+      if (next.length < 6) return send(me.ws, { t: "notice", text: "Password baru minimal 6 karakter." });
+      const { salt, hash } = hashPassword(next);
+      me.user.salt = salt;
+      me.user.passHash = hash;
+      // Sesi lain (perangkat lain) dikeluarkan; sesi ini tetap.
+      for (const [tok, s] of Object.entries(db.sessions)) if (s.userId === me.id && tok !== me.token) delete db.sessions[tok];
+      save();
+      send(me.ws, { t: "password_ok" });
+      return;
+    }
+    case "upload": {
+      const name = text(msg.name, 120).replace(/[\\/]/g, "_") || "file";
+      const mime = /^[\w.+-]+\/[\w.+-]+$/.test(msg.mime) ? String(msg.mime).toLowerCase() : "application/octet-stream";
+      const data = typeof msg.data === "string" ? Buffer.from(msg.data, "base64") : null;
+      if (!data || data.length === 0) return send(me.ws, { t: "upload_error", req: msg.req, reason: "File kosong." });
+      if (data.length > MAX_UPLOAD) return send(me.ws, { t: "upload_error", req: msg.req, reason: "Maksimal 5 MB per file." });
+      const id = newId() + newId();
+      writeFileSync(resolve(UPLOAD_DIR, id), data);
+      db.files[id] = { id, name, mime, size: data.length, by: me.id, ts: Date.now() };
+      save();
+      send(me.ws, { t: "upload_ok", req: msg.req, file: { id, name, mime, size: data.length } });
+      return;
+    }
     case "chat": {
       const body = text(msg.text, 500);
-      if (!body) return;
-      const base = { id: me.id, name: me.user.name, text: body, ts: Date.now() };
+      const file = fileRef(msg.file);
+      if (!body && !file) return;
+      const base = { id: me.id, mid: newId(), name: me.user.name, text: body, ts: Date.now(), file };
       if (msg.channel === "umum") {
-        pushCapped(db.umum, { from: me.id, name: me.user.name, text: body, ts: base.ts }, 200);
+        pushCapped(db.umum, { id: base.mid, from: me.id, name: me.user.name, text: body, ts: base.ts, file }, 300);
         save();
         broadcast({ t: "chat", channel: "umum", ...base });
         return;
       }
-      // Chat area: hanya orang yang juga bisa mendengar (satu area, atau dekat bila sama-sama di luar area).
+      // Chat area: hanya orang yang juga bisa mendengar.
       const zone = me.zone;
-      sendTo(
-        (pl) =>
-          zone
-            ? pl.zone?.id === zone.id
-            : !pl.zone && Math.hypot(pl.p[0] - me.p[0], pl.p[2] - me.p[2]) <= PROXIMITY.hear + PROXIMITY.hysteresis,
-        { t: "chat", channel: "area", scope: zone?.name ?? "Sekitar", ...base },
-      );
+      sendTo(areaAudience(me), { t: "chat", channel: "area", scope: zone?.name ?? "Sekitar", ...base });
       return;
     }
     case "dm": {
       const to = userById(String(msg.to));
       const body = text(msg.text, 1000);
-      if (!to || to.id === me.id || !body) return;
-      const m = { from: me.id, name: me.user.name, to: to.id, text: body, ts: Date.now() };
+      const file = fileRef(msg.file);
+      if (!to || to.id === me.id || (!body && !file)) return;
+      const m: ChatMsg = { id: newId(), from: me.id, name: me.user.name, to: to.id, text: body, ts: Date.now(), file };
       pushCapped((db.dms[dmKey(me.id, to.id)] ??= []), m, 300);
       save();
       send(me.ws, { t: "dm", msg: m });
@@ -411,6 +578,45 @@ function handle(me: Player, msg: any) {
       send(me.ws, { t: "dm_history", with: other, messages: (db.dms[dmKey(me.id, other)] ?? []).slice(-100) });
       return;
     }
+    case "react": {
+      const emoji = String(msg.emoji);
+      if (!REACTIONS.has(emoji)) return;
+      const list = msg.channel === "umum" ? db.umum : msg.channel === "dm" ? db.dms[dmKey(me.id, String(msg.with))] : undefined;
+      const m = list?.find((x) => x.id === msg.id);
+      if (!m) return;
+      const r = (m.reactions ??= {});
+      const users = (r[emoji] ??= []);
+      const i = users.indexOf(me.id);
+      if (i >= 0) users.splice(i, 1);
+      else users.push(me.id);
+      if (!users.length) delete r[emoji];
+      save();
+      const update = { t: "reaction", channel: msg.channel, id: m.id, reactions: m.reactions, with: undefined as string | undefined };
+      if (msg.channel === "umum") broadcast(update);
+      else {
+        const other = m.from === me.id ? m.to! : m.from;
+        send(me.ws, { ...update, with: other });
+        const target = players.get(other);
+        if (target) send(target.ws, { ...update, with: me.id });
+      }
+      return;
+    }
+    case "search": {
+      const q = text(msg.q, 80).toLowerCase();
+      if (q.length < 2) return send(me.ws, { t: "search_result", q, results: [] });
+      const hit = (m: ChatMsg) => m.text.toLowerCase().includes(q) || (m.file?.name.toLowerCase().includes(q) ?? false);
+      const results: (ChatMsg & { channel: string; with?: string })[] = [];
+      for (const m of db.umum) if (hit(m)) results.push({ ...m, channel: "umum" });
+      for (const [key, list] of Object.entries(db.dms)) {
+        const [a, b] = key.split("|");
+        if (a !== me.id && b !== me.id) continue; // hanya DM milik sendiri
+        const other = a === me.id ? b : a;
+        for (const m of list) if (hit(m)) results.push({ ...m, channel: "dm", with: other });
+      }
+      results.sort((x, y) => y.ts - x.ts);
+      send(me.ws, { t: "search_result", q, results: results.slice(0, 40) });
+      return;
+    }
     case "status": {
       if (["available", "busy", "away"].includes(msg.manual)) me.manual = msg.manual;
       if (typeof msg.idle === "boolean") me.idle = msg.idle;
@@ -420,7 +626,7 @@ function handle(me: Player, msg: any) {
     case "summon": {
       const target = players.get(String(msg.to));
       if (!target || target === me) return;
-      send(target.ws, { t: "summon", from: me.id, name: me.user.name, place: me.zone?.name ?? null, p: me.p });
+      send(target.ws, { t: "summon", from: me.id, name: me.user.name, place: me.zone?.name ?? null, floor: me.floor, floorName: floorName(me.floor), p: me.p });
       return;
     }
     case "hand": {
@@ -430,16 +636,17 @@ function handle(me: Player, msg: any) {
     }
     case "mute_room": {
       const zone = me.zone;
-      if (zone?.kind !== "room") return;
-      sendTo((pl) => pl !== me && pl.zone?.id === zone.id, { t: "mute_request", by: me.user.name });
+      if (zone?.kind !== "room" && !zone?.stage) return;
+      sendTo((pl) => pl !== me && pl.floor === me.floor && pl.zone?.id === zone.id, { t: "mute_request", by: me.user.name });
       return;
     }
     case "desk": {
+      if (me.user.role === "guest") return send(me.ws, { t: "notice", text: "Tamu tidak bisa mengklaim meja." });
       const mine = deskOf(me.id);
       if (msg.action === "claim") {
         // Satu orang satu meja; klaim meja baru melepas meja lama. Kepemilikan disimpan permanen.
         const id = String(msg.id);
-        if (!derived.zones.some((z) => z.id === id && z.kind === "desk") || db.deskOwners[id]) return;
+        if (!allZones().some((z) => z.id === id && z.kind === "desk") || db.deskOwners[id]) return;
         if (mine) {
           delete db.deskOwners[mine];
           lockedDesks.delete(mine);
@@ -486,6 +693,45 @@ function handle(me: Player, msg: any) {
       broadcast(worldView());
       return;
     }
+    // ----- booking ruangan -----
+    case "book": {
+      if (me.user.role === "guest") return send(me.ws, { t: "notice", text: "Tamu tidak bisa memesan ruangan." });
+      const room = allRooms().find((r) => r.id === msg.room);
+      const title = text(msg.title, 60) || "Rapat";
+      const start = isNum(msg.start) ? Math.round(msg.start / 60_000) * 60_000 : NaN;
+      const end = isNum(msg.end) ? Math.round(msg.end / 60_000) * 60_000 : NaN;
+      if (!room || !(end > start)) return send(me.ws, { t: "notice", text: "Waktu booking tidak valid." });
+      if (end - start < 15 * 60_000 || end - start > 8 * 3600_000) return send(me.ws, { t: "notice", text: "Durasi booking 15 menit sampai 8 jam." });
+      if (end < Date.now()) return send(me.ws, { t: "notice", text: "Waktu booking sudah lewat." });
+      const clash = db.bookings.find((b) => b.room === room.id && b.start < end && start < b.end);
+      if (clash) return send(me.ws, { t: "notice", text: `Bentrok dengan "${clash.title}" oleh ${clash.byName}.` });
+      db.bookings.push({ id: newId(), room: room.id, title, start, end, by: me.id, byName: me.user.name });
+      save();
+      broadcast(bookingsView());
+      return;
+    }
+    case "unbook": {
+      const b = db.bookings.find((x) => x.id === msg.id);
+      if (!b || (b.by !== me.id && me.user.role !== "admin")) return;
+      db.bookings = db.bookings.filter((x) => x !== b);
+      save();
+      broadcast(bookingsView());
+      return;
+    }
+    // ----- website di layar presentasi (hanya orang di area/ruangan layar itu) -----
+    case "screen_url": {
+      const item = layout.floors.flatMap((f) => f.items.map((i) => ({ i, f: f.id }))).find(({ i }) => i.id === msg.item && i.type === "screen");
+      if (!item) return;
+      const zone = zoneIn(derived[item.f], item.i.x, item.i.z);
+      if (!zone || me.zone?.id !== zone.id) return send(me.ws, { t: "notice", text: "Masuk ke ruangan layar itu dulu." });
+      const url = text(msg.url, 1000);
+      if (url && !/^https:\/\//i.test(url)) return send(me.ws, { t: "notice", text: "Alamat website harus diawali https://" });
+      if (url) db.screens[item.i.id] = url;
+      else delete db.screens[item.i.id];
+      save();
+      broadcast({ t: "screens", map: db.screens });
+      return;
+    }
     // ----- whiteboard per ruangan (hanya orang di dalam ruangan yang bisa melihat & menggambar) -----
     case "wb_open": {
       if (!insideRoom(msg.room, me)) return;
@@ -518,10 +764,20 @@ function handle(me: Player, msg: any) {
       layout = next;
       derived = derive(layout);
       db.layout = layout;
-      for (const id of Object.keys(db.deskOwners)) if (!derived.zones.some((z) => z.id === id)) delete db.deskOwners[id];
+      const zones = allZones();
+      for (const id of Object.keys(db.deskOwners)) if (!zones.some((z) => z.id === id)) delete db.deskOwners[id];
       for (const id of lockedDesks) if (!db.deskOwners[id]) lockedDesks.delete(id);
       syncDoors();
-      for (const pl of players.values()) pl.zone = zoneAt(pl.p);
+      for (const pl of players.values()) {
+        if (!derived[pl.floor]) {
+          // Lantainya dihapus → pindahkan ke lantai pertama.
+          pl.floor = firstFloor();
+          pl.p = randomSpawn();
+          send(pl.ws, { t: "move_to", floor: pl.floor, p: pl.p });
+          broadcast({ t: "player", id: pl.id, floor: pl.floor, p: pl.p }, pl.id);
+        }
+        pl.zone = zoneAt(pl.floor, pl.p);
+      }
       save();
       broadcast({ t: "layout", layout }, msg.reset ? undefined : me.id);
       broadcast(worldView());
@@ -551,15 +807,38 @@ function handle(me: Player, msg: any) {
           target.disabled = false;
           break;
         case "role":
-          if (!target || target.id === me.id || !["admin", "member"].includes(msg.role)) return;
+          if (!target || target.id === me.id || target.role === "guest" || !["admin", "member"].includes(msg.role)) return;
           target.role = msg.role;
           break;
+        case "reset_password": {
+          if (!target || target.role === "guest") return;
+          const temp = newToken().replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
+          const { salt, hash } = hashPassword(temp);
+          target.salt = salt;
+          target.passHash = hash;
+          for (const [tok, s] of Object.entries(db.sessions)) if (s.userId === target.id) delete db.sessions[tok];
+          const pl = players.get(target.id);
+          if (pl) {
+            send(pl.ws, { t: "kicked", reason: "Password-mu direset admin. Masuk lagi dengan password sementara dari admin." });
+            pl.ws.close();
+          }
+          send(me.ws, { t: "temp_password", userId: target.id, username: target.username, password: temp });
+          break;
+        }
         case "registration":
           if (!["open", "invite"].includes(msg.mode)) return;
           db.settings.registration = msg.mode;
           break;
         case "new_invite":
           db.settings.inviteCode = Math.random().toString(36).slice(2, 10);
+          break;
+        case "guest_link": {
+          const hours = isNum(msg.hours) ? Math.min(24 * 14, Math.max(1, Math.round(msg.hours))) : 24;
+          db.guestLinks[newToken()] = { label: text(msg.label, 60) || "Tamu", exp: Date.now() + hours * 3600_000, createdBy: me.id };
+          break;
+        }
+        case "guest_revoke":
+          delete db.guestLinks[String(msg.token)];
           break;
         default:
           return;
@@ -618,11 +897,14 @@ setInterval(() => {
     u.push([pl.id, ...pl.p.map((n) => Math.round(n * 100) / 100), Math.round(pl.r * 100) / 100, pl.a]);
   }
   if (u.length) broadcast({ t: "state", ts: Date.now(), u });
-  if (directoryDirty) {
-    directoryDirty = false;
-    broadcast({ t: "directory", users: directory() });
-  }
 }, 1000 / TICK_HZ);
+
+// Direktori (status, lokasi) dikirim paling sering sekali per detik — perubahan area terjadi terus saat orang berjalan.
+setInterval(() => {
+  if (!directoryDirty) return;
+  directoryDirty = false;
+  broadcast({ t: "directory", users: directory() });
+}, 1000);
 
 // Putuskan koneksi yang mati (tab ditutup paksa, jaringan putus).
 setInterval(() => {
@@ -636,12 +918,43 @@ setInterval(() => {
   }
 }, 15000);
 
-// Bersihkan sesi kedaluwarsa sekali sehari.
+// Tiap menit: akun tamu & link tamu yang kedaluwarsa dihapus.
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  for (const u of db.users.filter((x) => x.guestExp && x.guestExp < now)) {
+    const pl = players.get(u.id);
+    if (pl) {
+      send(pl.ws, { t: "kicked", reason: "Waktu kunjungan tamu sudah habis. Terima kasih sudah mampir!" });
+      pl.ws.close();
+    }
+    db.users = db.users.filter((x) => x !== u);
+    for (const [tok, s] of Object.entries(db.sessions)) if (s.userId === u.id) delete db.sessions[tok];
+    changed = true;
+  }
+  for (const [tok, g] of Object.entries(db.guestLinks)) if (g.exp < now) delete db.guestLinks[tok];
+  db.bookings = db.bookings.filter((b) => b.end > now - 7 * 86_400_000);
+  if (changed) {
+    save();
+    pushAdminState();
+    markDirectory();
+  }
+}, 60_000);
+
+// Sesi kedaluwarsa dibersihkan & database dicadangkan berkala.
 setInterval(() => {
   const now = Date.now();
   for (const [tok, s] of Object.entries(db.sessions)) if (s.exp < now) delete db.sessions[tok];
   save();
 }, 86_400_000);
+setInterval(() => {
+  try {
+    flush();
+    backup();
+  } catch (err) {
+    console.warn("Backup gagal:", err);
+  }
+}, 6 * 3600_000);
 
 process.on("exit", flush);
-console.log(`Virtual office server jalan di ws://localhost:${PORT}`);
+http.listen(PORT, () => console.log(`Virtual office server jalan di ws://localhost:${PORT}`));

@@ -3,6 +3,7 @@ import { sanitizeAvatar, type AvatarConfig } from "./avatar/config";
 import { derive, type Derived, type Layout } from "../../shared/layout";
 import { setDerived } from "./zones";
 import { notify } from "./notify";
+import { place, t } from "./i18n";
 
 export type Vec3 = [number, number, number];
 
@@ -10,31 +11,68 @@ export interface PlayerInfo {
   id: string;
   name: string;
   avatar: AvatarConfig;
+  floor: string;
+}
+
+export interface FileRef {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export type Reactions = Record<string, string[]>;
+
+export interface Booking {
+  id: string;
+  room: string;
+  title: string;
+  start: number;
+  end: number;
+  by: string;
+  byName: string;
+}
+
+export interface SearchHit {
+  id: string;
+  channel: "umum" | "dm";
+  with?: string;
+  name: string;
+  text: string;
+  ts: number;
+  file?: FileRef;
 }
 
 export interface Me {
   id: string;
   username: string;
   name: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "guest";
   avatar: AvatarConfig | null;
   ical: string | null;
+  guestExp: number | null;
 }
 
 export interface ChatMessage {
   id: string; // pengirim
+  mid: string; // id pesan
   name: string;
   text: string;
   ts: number;
   scope?: string; // nama area (chat area)
+  file?: FileRef;
+  reactions?: Reactions;
 }
 
 export interface DmMessage {
+  id: string;
   from: string;
   to: string;
   name: string;
   text: string;
   ts: number;
+  file?: FileRef;
+  reactions?: Reactions;
 }
 
 export type Presence = "available" | "busy" | "meeting" | "away" | "focus" | "offline";
@@ -43,7 +81,9 @@ export interface DirUser {
   id: string;
   username: string;
   name: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "guest";
+  floor: string | null;
+  floorName: string | null;
   online: boolean;
   status: Presence;
   calendar: boolean;
@@ -64,14 +104,15 @@ export interface DeskState {
 }
 
 export interface AdminState {
-  users: { id: string; username: string; name: string; role: "admin" | "member"; disabled: boolean; online: boolean }[];
+  users: { id: string; username: string; name: string; role: "admin" | "member" | "guest"; disabled: boolean; online: boolean }[];
   registration: "open" | "invite";
   inviteCode: string;
+  guestLinks: { token: string; label: string; exp: number }[];
 }
 
 export type ChatTab = "area" | "umum" | `dm:${string}`;
 
-type Phase = "boot" | "auth" | "avatar" | "entering" | "online" | "reconnecting" | "kicked";
+type Phase = "boot" | "auth" | "guest" | "avatar" | "entering" | "online" | "reconnecting" | "kicked";
 
 interface NetState {
   phase: Phase;
@@ -83,7 +124,16 @@ interface NetState {
   spawn: Vec3;
   players: Record<string, PlayerInfo>;
   layout: Layout | null;
-  derived: Derived | null;
+  floor: string; // lantai tempat kita berada
+  derivedAll: Record<string, Derived>;
+  derived: Derived | null; // turunan lantai kita
+  bookings: Booking[];
+  screens: Record<string, string>; // id item layar → URL website
+  search: { q: string; results: SearchHit[] } | null;
+  tempPassword: { username: string; password: string } | null;
+  following: string | null; // id orang yang sedang diikuti
+  openScreen: string | null; // id item layar yang jendelanya sedang dibuka
+  openBooking: string | null; // id ruangan yang jadwalnya sedang dibuka
   directory: DirUser[];
   chat: { area: ChatMessage[]; umum: ChatMessage[] };
   dms: Record<string, DmMessage[]>;
@@ -99,9 +149,10 @@ interface NetState {
   doors: Record<string, DoorState>;
   nearDoor: string | null;
   nearSeat: string | null;
+  nearLift: boolean;
   sitting: boolean;
   notice: { text: string; ts: number } | null;
-  summon: { from: string; name: string; place: string | null; p: Vec3; ts: number } | null;
+  summon: { from: string; name: string; place: string | null; floor: string; floorName: string; p: Vec3; ts: number } | null;
   admin: AdminState | null;
   manualStatus: "available" | "busy" | "away";
 }
@@ -116,7 +167,16 @@ export const useNet = create<NetState>(() => ({
   spawn: [0, 0, 8],
   players: {},
   layout: null,
+  floor: "f1",
+  derivedAll: {},
   derived: null,
+  bookings: [],
+  screens: {},
+  search: null,
+  tempPassword: null,
+  following: null,
+  openScreen: null,
+  openBooking: null,
   directory: [],
   chat: { area: [], umum: [] },
   dms: {},
@@ -132,6 +192,7 @@ export const useNet = create<NetState>(() => ({
   doors: {},
   nearDoor: null,
   nearSeat: null,
+  nearLift: false,
   sitting: false,
   notice: null,
   summon: null,
@@ -173,10 +234,29 @@ function pushSnapshot(id: string, p: Vec3, r: number, a: number, t: number) {
 
 /** Terapkan denah (dari server, atau perubahan lokal editor sebelum dikirim). */
 export function applyLayout(layout: Layout) {
-  const derived = derive(layout);
-  setDerived(derived);
-  useNet.setState({ layout, derived });
+  const derivedAll = derive(layout);
+  let floor = useNet.getState().floor;
+  if (!derivedAll[floor]) floor = layout.floors[0].id;
+  setDerived(derivedAll[floor]);
+  useNet.setState({ layout, derivedAll, floor, derived: derivedAll[floor] });
 }
+
+/** Ganti lantai tampilan & logika lokal (dipanggil saat naik lift, dipanggil/teleport, atau dipindah server). */
+export function setFloorLocal(floor: string) {
+  const d = useNet.getState().derivedAll[floor];
+  if (!d) return;
+  setDerived(d);
+  useNet.setState({ floor, derived: d, nearDoor: null, nearSeat: null });
+}
+
+/** Naik lift / pindah lantai: lokal dulu, lalu server. `p` = posisi tiba. */
+export function changeFloor(floor: string, p: Vec3) {
+  setFloorLocal(floor);
+  send({ t: "floor", floor, p });
+}
+
+const sameFloor = (id: string) => useNet.getState().players[id]?.floor === useNet.getState().floor;
+export { sameFloor };
 
 // ---------- koneksi, login & sambung ulang ----------
 
@@ -237,10 +317,18 @@ function resume() {
   open({ t: "resume", token });
 }
 
-/** Dipanggil sekali saat aplikasi dibuka: masuk otomatis bila masih ada sesi. */
+/** Token link tamu dari URL (?guest=…), bila ada. */
+export const guestToken = new URLSearchParams(location.search).get("guest");
+
+/** Dipanggil sekali saat aplikasi dibuka: masuk otomatis bila masih ada sesi; link tamu → layar nama tamu. */
 export function boot() {
   if (storage.get(TOKEN_KEY)) resume();
-  else useNet.setState({ phase: "auth" });
+  else useNet.setState({ phase: guestToken ? "guest" : "auth" });
+}
+
+export function joinAsGuest(name: string) {
+  useNet.setState({ authError: null });
+  open({ t: "guest", token: guestToken, name });
 }
 
 export function login(username: string, password: string) {
@@ -296,7 +384,7 @@ function handle(msg: any) {
     }
     case "auth_error":
       storage.set(TOKEN_KEY, null);
-      useNet.setState({ phase: "auth", authError: msg.reason });
+      useNet.setState({ phase: guestToken ? "guest" : "auth", authError: msg.reason });
       break;
     case "need_avatar":
       useNet.setState({ phase: "avatar" });
@@ -309,16 +397,20 @@ function handle(msg: any) {
       remoteState.clear();
       const players: Record<string, PlayerInfo> = {};
       for (const pl of msg.players) {
-        players[pl.id] = { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar) };
+        players[pl.id] = { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar), floor: pl.floor };
         pushSnapshot(pl.id, pl.p, pl.r, pl.a, performance.now());
       }
+      // Saat menyambung ulang, lantai lokal dipertahankan (server diberi tahu lewat posisi & lantai).
+      const keepFloor = useNet.getState().self ? useNet.getState().floor : msg.floor;
+      useNet.setState({ floor: keepFloor });
       applyLayout(msg.layout);
+      if (keepFloor !== msg.floor) send({ t: "floor", floor: keepFloor, p: selfPos.p });
       const me = useNet.getState().me!;
-      const umum: ChatMessage[] = msg.umum.map((m: any) => ({ id: m.from, name: m.name, text: m.text, ts: m.ts }));
+      const umum: ChatMessage[] = msg.umum.map((m: any) => ({ id: m.from, mid: m.id, name: m.name, text: m.text, ts: m.ts, file: m.file, reactions: m.reactions }));
       useNet.setState((s) => ({
         phase: "online",
         selfId: msg.id,
-        self: { id: msg.id, name: me.name, avatar: me.avatar! },
+        self: { id: msg.id, name: me.name, avatar: me.avatar!, floor: keepFloor },
         spawn: s.self ? s.spawn : msg.spawn, // saat menyambung ulang, posisi lokal dipertahankan
         players,
         chat: { ...s.chat, umum },
@@ -332,7 +424,7 @@ function handle(msg: any) {
     case "join": {
       const pl = msg.player;
       pushSnapshot(pl.id, pl.p, pl.r, pl.a, performance.now());
-      useNet.setState((s) => ({ players: { ...s.players, [pl.id]: { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar) } } }));
+      useNet.setState((s) => ({ players: { ...s.players, [pl.id]: { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar), floor: pl.floor } } }));
       break;
     }
     case "leave": {
@@ -346,14 +438,59 @@ function handle(msg: any) {
     case "player": {
       const info = useNet.getState().players[msg.id];
       if (!info) break;
+      if (msg.floor && msg.p) {
+        // Pindah lantai: riwayat posisi direset supaya tidak "meluncur" dari posisi lama.
+        remoteState.delete(msg.id);
+        pushSnapshot(msg.id, msg.p, 0, 0, performance.now());
+      }
       useNet.setState((s) => ({
         players: {
           ...s.players,
-          [msg.id]: { ...info, ...(msg.name ? { name: msg.name } : {}), ...(msg.avatar ? { avatar: sanitizeAvatar(msg.avatar) } : {}) },
+          [msg.id]: {
+            ...info,
+            ...(msg.name ? { name: msg.name } : {}),
+            ...(msg.avatar ? { avatar: sanitizeAvatar(msg.avatar) } : {}),
+            ...(msg.floor ? { floor: msg.floor } : {}),
+          },
         },
       }));
       break;
     }
+    case "move_to":
+      setFloorLocal(msg.floor);
+      import("./Player").then((m) => m.teleportTo(msg.p[0], msg.p[2]));
+      showNotice(t("Lantaimu dihapus admin — kamu dipindah ke lantai pertama."));
+      break;
+    case "bookings":
+      useNet.setState({ bookings: msg.list });
+      break;
+    case "screens":
+      useNet.setState({ screens: msg.map });
+      break;
+    case "reaction":
+      if (msg.channel === "umum") {
+        useNet.setState((s) => ({ chat: { ...s.chat, umum: s.chat.umum.map((m) => (m.mid === msg.id ? { ...m, reactions: msg.reactions } : m)) } }));
+      } else {
+        useNet.setState((s) => ({ dms: { ...s.dms, [msg.with]: (s.dms[msg.with] ?? []).map((m) => (m.id === msg.id ? { ...m, reactions: msg.reactions } : m)) } }));
+      }
+      break;
+    case "search_result":
+      useNet.setState({ search: { q: msg.q, results: msg.results } });
+      break;
+    case "upload_ok":
+    case "upload_error": {
+      const w = uploads.get(msg.req);
+      uploads.delete(msg.req);
+      if (msg.t === "upload_ok") w?.resolve(msg.file);
+      else w?.reject(new Error(msg.reason));
+      break;
+    }
+    case "temp_password":
+      useNet.setState({ tempPassword: { username: msg.username, password: msg.password } });
+      break;
+    case "password_ok":
+      showNotice(`✓ ${t("Password berhasil diganti. Perangkat lain sudah dikeluarkan.")}`);
+      break;
     case "state": {
       const selfId = useNet.getState().selfId;
       clockOffset = Math.min(clockOffset, performance.now() - msg.ts);
@@ -368,7 +505,7 @@ function handle(msg: any) {
       useNet.setState({ directory: msg.users });
       break;
     case "chat": {
-      const c: ChatMessage = { id: msg.id, name: msg.name, text: msg.text, ts: msg.ts, scope: msg.scope };
+      const c: ChatMessage = { id: msg.id, mid: msg.mid, name: msg.name, text: msg.text, ts: msg.ts, scope: msg.scope, file: msg.file };
       const tab: ChatTab = msg.channel === "umum" ? "umum" : "area";
       const mine = msg.id === useNet.getState().selfId;
       useNet.setState((s) => ({
@@ -378,8 +515,9 @@ function handle(msg: any) {
       }));
       if (!mine) {
         addUnread(tab);
-        if (mentionsMe(c.text)) notify("mention", `${c.name} menyebutmu`, c.text);
-        else if (!isViewing(tab)) notify("message", tab === "umum" ? `${c.name} · Umum` : `${c.name} · ${c.scope}`, c.text, { quiet: true });
+        const preview = c.text || `📎 ${c.file?.name ?? t("lampiran")}`;
+        if (mentionsMe(c.text)) notify("mention", t("{name} menyebutmu", { name: c.name }), preview);
+        else if (!isViewing(tab)) notify("message", tab === "umum" ? `${c.name} · ${t("Umum")}` : `${c.name} · ${place(c.scope)}`, preview, { quiet: true });
       }
       break;
     }
@@ -393,7 +531,7 @@ function handle(msg: any) {
       }));
       if (m.from !== selfId) {
         addUnread(`dm:${other}`);
-        if (!isViewing(`dm:${other}`)) notify("message", `Pesan dari ${m.name}`, m.text);
+        if (!isViewing(`dm:${other}`)) notify("message", t("Pesan dari {name}", { name: m.name }), m.text || `📎 ${m.file?.name ?? t("lampiran")}`);
       }
       break;
     }
@@ -401,19 +539,19 @@ function handle(msg: any) {
       useNet.setState((s) => ({ dms: { ...s.dms, [msg.with]: msg.messages } }));
       break;
     case "summon":
-      useNet.setState({ summon: { from: msg.from, name: msg.name, place: msg.place, p: msg.p, ts: Date.now() } });
-      notify("summon", `${msg.name} memanggilmu`, msg.place ? `Ke ${msg.place}` : "Ke tempatnya sekarang");
+      useNet.setState({ summon: { from: msg.from, name: msg.name, place: msg.place, floor: msg.floor, floorName: msg.floorName, p: msg.p, ts: Date.now() } });
+      notify("summon", t("{name} memanggilmu", { name: msg.name }), msg.place ? t("Ke {place}", { place: place(msg.place) }) : t("Ke tempatnya sekarang"));
       break;
     case "world":
       useNet.setState({ desks: msg.desks, doors: msg.doors });
       break;
     case "knock":
-      showNotice(`🚪 ${msg.name} mengetuk pintu — buka kunci dari dalam kalau boleh masuk`);
-      notify("knock", "Ada yang mengetuk pintu", `${msg.name} ingin masuk`);
+      showNotice(`🚪 ${t("{name} mengetuk pintu — buka kunci dari dalam kalau boleh masuk", { name: msg.name })}`);
+      notify("knock", t("Ada yang mengetuk pintu"), t("{name} ingin masuk", { name: msg.name }));
       break;
     case "mute_request":
       import("./media").then((m) => m.muteMic());
-      showNotice(`🔇 ${msg.by} mematikan mic semua orang di ruangan`);
+      showNotice(`🔇 ${t("{name} mematikan mic semua orang di ruangan", { name: msg.by })}`);
       break;
     case "wb_state":
     case "wb_stroke":
@@ -424,7 +562,7 @@ function handle(msg: any) {
       useNet.setState({ media: { url: msg.url, token: msg.token } });
       break;
     case "admin_state":
-      useNet.setState({ admin: { users: msg.users, registration: msg.registration, inviteCode: msg.inviteCode } });
+      useNet.setState({ admin: { users: msg.users, registration: msg.registration, inviteCode: msg.inviteCode, guestLinks: msg.guestLinks } });
       break;
     case "settings_ok": {
       const me: Me = { ...msg.user, avatar: msg.user.avatar ? sanitizeAvatar(msg.user.avatar) : null };
@@ -432,7 +570,7 @@ function handle(msg: any) {
       break;
     }
     case "notice":
-      showNotice(msg.text);
+      showNotice(t(msg.text));
       break;
     case "full":
       stopped = true;
@@ -464,7 +602,7 @@ export type DoorAction = "open" | "close" | "lock" | "unlock" | "knock";
 
 export function sendDoor(id: string, action: DoorAction) {
   send({ t: "door", id, action });
-  if (action === "knock") showNotice("🚪 Kamu mengetuk pintu…");
+  if (action === "knock") showNotice(`🚪 ${t("Kamu mengetuk pintu…")}`);
 }
 
 /** Aksi tombol F di pintu: ketuk bila terkunci & kita di luar, selain itu buka/tutup. */
@@ -474,13 +612,47 @@ export function doorPrimaryAction(id: string, inside: boolean): DoorAction {
   return d.open ? "close" : "open";
 }
 
-export function sendChat(channel: "area" | "umum", text: string) {
-  send({ t: "chat", channel, text });
+export function sendChat(channel: "area" | "umum", text: string, file?: FileRef) {
+  send({ t: "chat", channel, text, file });
 }
 
-export function sendDm(to: string, text: string) {
-  send({ t: "dm", to, text });
+export function sendDm(to: string, text: string, file?: FileRef) {
+  send({ t: "dm", to, text, file });
 }
+
+export const sendReaction = (channel: "umum" | "dm", id: string, emoji: string, withId?: string) => send({ t: "react", channel, id, emoji, with: withId });
+export const sendSearch = (q: string) => send({ t: "search", q });
+export const sendBooking = (room: string, title: string, start: number, end: number) => send({ t: "book", room, title, start, end });
+export const sendUnbook = (id: string) => send({ t: "unbook", id });
+export const sendScreenUrl = (item: string, url: string) => send({ t: "screen_url", item, url });
+export const sendPassword = (oldPw: string, newPw: string) => send({ t: "password", old: oldPw, new: newPw });
+
+// Upload lampiran (base64 lewat WebSocket); hasilnya referensi file untuk dikirim di chat/DM.
+const uploads = new Map<number, { resolve: (f: FileRef) => void; reject: (e: Error) => void }>();
+let uploadSeq = 0;
+export const MAX_UPLOAD = 5 * 1024 * 1024;
+
+export function uploadFile(file: File): Promise<FileRef> {
+  if (file.size > MAX_UPLOAD) return Promise.reject(new Error("Maksimal 5 MB per file."));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = String(reader.result).split(",")[1] ?? "";
+      const req = ++uploadSeq;
+      uploads.set(req, { resolve, reject });
+      send({ t: "upload", req, name: file.name, mime: file.type || "application/octet-stream", data });
+      setTimeout(() => {
+        if (uploads.delete(req)) reject(new Error("Upload kelamaan, coba lagi."));
+      }, 60_000);
+    };
+    reader.onerror = () => reject(new Error("File tidak bisa dibaca."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Alamat HTTP server (untuk lampiran) — sama host & port dengan WebSocket. */
+export const HTTP_BASE = SERVER_URL.replace(/^ws/, "http");
+export const fileUrl = (f: FileRef) => `${HTTP_BASE}/files/${f.id}/${encodeURIComponent(f.name)}`;
 
 export function openChatTab(tab: ChatTab) {
   useNet.setState((s) => {

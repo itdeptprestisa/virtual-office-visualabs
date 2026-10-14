@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import { Html, Line } from "@react-three/drei";
@@ -8,6 +8,7 @@ import { useNet, type DeskState } from "./net";
 import { COLLIDERS, FOOTPRINT, Furniture } from "./Furniture";
 import { moveItem, snap, useEditor } from "./editor";
 import { pointerLock } from "./input";
+import { locale, t, useT } from "./i18n";
 
 // Kantor digambar dari data denah (useNet.layout); bentuk turunan (area, pintu, dinding) dari useNet.derived.
 
@@ -58,8 +59,11 @@ function Shell() {
 
 // ---------- ruangan: lantai berwarna + dinding kaca + pintu ----------
 
+const EMPTY: never[] = [];
+const useFloor = () => useNet((s) => s.layout?.floors.find((f) => f.id === s.floor));
+
 function RoomFloors() {
-  const rooms = useNet((s) => s.layout?.rooms ?? []);
+  const rooms = useFloor()?.rooms ?? EMPTY;
   return (
     <>
       {rooms.map((r) => {
@@ -76,7 +80,7 @@ function RoomFloors() {
 }
 
 function GlassWalls() {
-  const walls = useNet((s) => s.derived?.walls ?? []);
+  const walls = useNet((s) => s.derived?.walls ?? EMPTY);
   return (
     <>
       {walls.map((w) => {
@@ -115,6 +119,7 @@ function DoorView({ door }: { door: Door }) {
   const locked = useNet((s) => s.doors[door.id]?.locked ?? false);
   const left = useRef<Mesh>(null);
   const right = useRef<Mesh>(null);
+  const booking = useBookingLabel(door.id);
   const half = (door.a[1] - door.a[0]) / 2;
   const mid = (door.a[0] + door.a[1]) / 2;
 
@@ -140,9 +145,12 @@ function DoorView({ door }: { door: Door }) {
     <group position={door.orient === "x" ? [mid, 0, door.c] : [door.c, 0, mid]} rotation-y={door.orient === "x" ? 0 : Math.PI / 2}>
       {leaf(-1)}
       {leaf(1)}
-      {locked && (
-        <Html position={[0, 2.75, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div className="desk-label locked">🔒 Terkunci</div>
+      {(locked || booking) && (
+        <Html position={[0, 2.85, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+          <div className="door-labels">
+            {locked && <div className="desk-label locked">🔒 {t("Terkunci")}</div>}
+            {booking && <div className={booking.now ? "desk-label booked" : "desk-label"}>{booking.text}</div>}
+          </div>
         </Html>
       )}
       {!open && (
@@ -154,8 +162,26 @@ function DoorView({ door }: { door: Door }) {
   );
 }
 
+const hhmm = (ts: number) => new Date(ts).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
+
+/** Label jadwal di atas pintu: yang sedang berlangsung, atau booking berikutnya hari ini. Diperbarui tiap 30 detik. */
+function useBookingLabel(roomId: string) {
+  useT();
+  const bookings = useNet((s) => s.bookings);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const mine = bookings.filter((b) => b.room === roomId && b.end > now);
+  const current = mine.find((b) => b.start <= now);
+  if (current) return { now: true, text: `📅 ${current.title} · ${t("s/d")} ${hhmm(current.end)}` };
+  const next = mine.find((b) => new Date(b.start).toDateString() === new Date(now).toDateString());
+  return next ? { now: false, text: `📅 ${t("Berikutnya")} ${hhmm(next.start)} · ${next.title}` } : null;
+}
+
 function Doors() {
-  const doors = useNet((s) => s.derived?.doors ?? []);
+  const doors = useNet((s) => s.derived?.doors ?? EMPTY);
   return (
     <>
       {doors.map((d) => (
@@ -202,7 +228,7 @@ function ZoneMarker({ zone, active, color = zone.color }: { zone: Zone; active: 
 const zoneKey = (z: Zone) => `${z.id}:${z.shape === "rect" ? [...z.x, ...z.z].join() : [z.cx, z.cz, z.r].join()}`;
 
 function ZoneMarkers() {
-  const zones = useNet((s) => s.derived?.zones ?? []);
+  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
   const current = useNet((s) => s.zoneId);
   const desks = useNet((s) => s.desks);
   return (
@@ -216,6 +242,7 @@ function ZoneMarkers() {
 
 // Label pemilik meja + pembatas merah transparan saat meja dikunci (mode fokus).
 function DeskOverlay({ zone, desk }: { zone: Extract<Zone, { shape: "rect" }>; desk: DeskState }) {
+  useT();
   const [x0, x1] = zone.x;
   const [z0, z1] = zone.z;
   const cx = (x0 + x1) / 2;
@@ -239,7 +266,7 @@ function DeskOverlay({ zone, desk }: { zone: Extract<Zone, { shape: "rect" }>; d
       {/* di atas monitor (sisi belakang meja), supaya tidak menumpuk dengan nama orang yang duduk */}
       <Html position={[cx, 1.45, zone.z[0] + 0.2]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className={desk.locked ? "desk-label locked" : desk.online ? "desk-label" : "desk-label offline"}>
-          {desk.locked ? "🔒 Fokus" : "🪑"} {desk.ownerName}
+          {desk.locked ? `🔒 ${t("Fokus")}` : "🪑"} {desk.ownerName}
         </div>
       </Html>
     </group>
@@ -248,7 +275,7 @@ function DeskOverlay({ zone, desk }: { zone: Extract<Zone, { shape: "rect" }>; d
 
 function DeskOverlays() {
   const desks = useNet((s) => s.desks);
-  const zones = useNet((s) => s.derived?.zones ?? []);
+  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
   return (
     <>
       {zones.map((zn) => {
@@ -261,7 +288,7 @@ function DeskOverlays() {
 
 // ---------- furnitur (+ interaksi editor) ----------
 
-function ItemNode({ item, room }: { item: Item; room: string | null }) {
+function ItemNode({ item, room, zone }: { item: Item; room: string | null; zone: string | null }) {
   const editing = useEditor((s) => s.active);
   const selected = useEditor((s) => s.selected === item.id);
   const drag = useEditor((s) => (s.drag?.id === item.id ? s.drag : null));
@@ -295,7 +322,7 @@ function ItemNode({ item, room }: { item: Item; room: string | null }) {
         </RigidBody>
       )}
       <group position={[x, 0, z]} rotation-y={angle} onPointerDown={editing ? onDown : undefined}>
-        <Furniture type={item.type} room={room} />
+        <Furniture type={item.type} room={room} zone={zone} itemId={item.id} />
       </group>
       {editing && selected && (
         <mesh rotation-x={-Math.PI / 2} position={[x, 0.03, z]}>
@@ -327,15 +354,16 @@ function DragPlane() {
 }
 
 function Items() {
-  const items = useNet((s) => s.layout?.items ?? []);
-  const zones = useNet((s) => s.derived?.zones ?? []);
-  // Layar & whiteboard milik ruangan tempat mereka berada.
-  const roomOf = (it: Item) => zones.find((z) => z.kind === "room" && inZone(z, it.x, it.z))?.refId ?? null;
+  const floor = useFloor();
+  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
+  // Layar & whiteboard milik zona (ruangan/panggung) tempat mereka berada.
+  const zoneOf = (it: Item) => zones.find((z) => z.kind !== "desk" && inZone(z, it.x, it.z)) ?? null;
   return (
     <>
-      {items.map((it) => (
-        <ItemNode key={it.id} item={it} room={it.type === "screen" || it.type === "whiteboard" ? roomOf(it) : null} />
-      ))}
+      {(floor?.items ?? EMPTY).map((it) => {
+        const z = it.type === "screen" || it.type === "whiteboard" ? zoneOf(it) : null;
+        return <ItemNode key={it.id} item={it} zone={z?.id ?? null} room={z?.kind === "room" ? z.refId : null} />;
+      })}
     </>
   );
 }

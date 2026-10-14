@@ -9,7 +9,7 @@ import {
   type RemoteAudioTrack,
   type Participant,
 } from "livekit-client";
-import { remoteState } from "./net";
+import { remoteState, sameFloor } from "./net";
 import { PROXIMITY, audioLink, zoneAt } from "./zones";
 
 
@@ -26,6 +26,7 @@ interface MediaState {
   sharing: boolean;
   speaking: Record<string, boolean>;
   nearby: number;
+  talking: boolean; // PTT: sedang menahan Spasi
 }
 
 export const useMedia = create<MediaState>(() => ({
@@ -38,6 +39,7 @@ export const useMedia = create<MediaState>(() => ({
   sharing: false,
   speaking: {},
   nearby: 0,
+  talking: false,
 }));
 
 // Kamera → bubble di atas kepala; share screen → panel/layar presentasi.
@@ -49,12 +51,51 @@ const setVideo = (identity: string, track: Track | undefined, source: Track.Sour
 // Elemen <audio> per track; dicatat sendiri karena LiveKit bisa melepasnya sebelum event unsubscribe.
 const audioEls = new Map<string, HTMLMediaElement>();
 
+// ---------- preferensi perangkat (tersimpan di browser) ----------
+
+interface MediaPrefs {
+  mic?: string;
+  cam?: string;
+  speaker?: string;
+  noiseSuppression: boolean;
+  ptt: boolean; // push-to-talk: mic hanya hidup selama Spasi ditahan
+}
+
+function loadPrefs(): MediaPrefs {
+  try {
+    return { noiseSuppression: true, ptt: false, ...JSON.parse(localStorage.getItem("vo-media") ?? "{}") };
+  } catch {
+    return { noiseSuppression: true, ptt: false };
+  }
+}
+
+export const usePrefs = create<MediaPrefs>(loadPrefs);
+usePrefs.subscribe((p) => {
+  try {
+    localStorage.setItem("vo-media", JSON.stringify(p));
+  } catch {
+    /* mode privat */
+  }
+});
+
+const audioOptions = () => {
+  const p = usePrefs.getState();
+  return {
+    deviceId: p.mic,
+    noiseSuppression: p.noiseSuppression,
+    echoCancellation: p.noiseSuppression,
+    autoGainControl: p.noiseSuppression,
+  };
+};
+
 export const room = new Room({
   // Kualitas diatur manual per jenis track (lihat TrackSubscribed): adaptiveStream menilai dari ukuran elemen
   // di halaman, padahal share screen juga tampil sebagai tekstur 3D di layar presentasi.
   adaptiveStream: false,
   dynacast: true, // layer simulcast yang tak ditonton tidak dikirim
-  videoCaptureDefaults: { resolution: VideoPresets.h216.resolution },
+  videoCaptureDefaults: { resolution: VideoPresets.h216.resolution, deviceId: usePrefs.getState().cam },
+  audioCaptureDefaults: audioOptions(),
+  audioOutput: usePrefs.getState().speaker ? { deviceId: usePrefs.getState().speaker } : undefined,
   publishDefaults: { simulcast: true },
 });
 
@@ -119,11 +160,73 @@ export async function toggleMic() {
   const next = !useMedia.getState().mic;
   try {
     await room.startAudio();
-    await room.localParticipant.setMicrophoneEnabled(next);
+    await room.localParticipant.setMicrophoneEnabled(next, audioOptions());
     useMedia.setState({ mic: next });
+    if (next && usePrefs.getState().ptt) await setMicMuted(true); // PTT: siap, tapi diam sampai Spasi ditahan
   } catch (err) {
     console.warn("Mikrofon gagal:", err);
   }
+}
+
+async function setMicMuted(muted: boolean) {
+  const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  if (!pub?.track) return;
+  if (muted) await pub.mute();
+  else await pub.unmute();
+  useMedia.setState({ talking: !muted });
+}
+
+/** Push-to-talk: tahan Spasi untuk bicara (hanya bila mode PTT aktif dan mic dinyalakan). */
+export function setupPushToTalk() {
+  const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+  const down = (e: KeyboardEvent) => {
+    if (e.code !== "Space" || e.repeat || typing(e.target) || !usePrefs.getState().ptt || !useMedia.getState().mic) return;
+    e.preventDefault();
+    setMicMuted(false);
+  };
+  const up = (e: KeyboardEvent) => {
+    if (e.code !== "Space" || !usePrefs.getState().ptt || !useMedia.getState().mic) return;
+    setMicMuted(true);
+  };
+  window.addEventListener("keydown", down);
+  window.addEventListener("keyup", up);
+  window.addEventListener("blur", () => usePrefs.getState().ptt && useMedia.getState().mic && setMicMuted(true));
+}
+
+/** Daftar perangkat (label kosong sampai izin mic/kamera diberikan). */
+export async function listDevices() {
+  const [mics, cams, speakers] = await Promise.all([
+    Room.getLocalDevices("audioinput", false),
+    Room.getLocalDevices("videoinput", false),
+    Room.getLocalDevices("audiooutput", false),
+  ]);
+  return { mics, cams, speakers };
+}
+
+export async function chooseDevice(kind: "mic" | "cam" | "speaker", deviceId: string) {
+  usePrefs.setState({ [kind]: deviceId });
+  const lk = kind === "mic" ? "audioinput" : kind === "cam" ? "videoinput" : "audiooutput";
+  try {
+    if (room.state === "connected") await room.switchActiveDevice(lk, deviceId);
+  } catch (err) {
+    console.warn("Ganti perangkat gagal:", err);
+  }
+}
+
+/** Peredam bising + pembatal gema + penyesuai volume otomatis; mic aktif dinyalakan ulang supaya berlaku. */
+export async function setNoiseSuppression(on: boolean) {
+  usePrefs.setState({ noiseSuppression: on });
+  room.options.audioCaptureDefaults = { ...room.options.audioCaptureDefaults, ...audioOptions() };
+  if (useMedia.getState().mic) {
+    await room.localParticipant.setMicrophoneEnabled(false);
+    await room.localParticipant.setMicrophoneEnabled(true, audioOptions());
+    if (usePrefs.getState().ptt) await setMicMuted(true);
+  }
+}
+
+export async function setPushToTalk(on: boolean) {
+  usePrefs.setState({ ptt: on });
+  if (useMedia.getState().mic) await setMicMuted(on);
 }
 
 /** Matikan mic (mis. "mute semua" di ruang meeting). */
@@ -170,7 +273,8 @@ export function updateProximity(x: number, z: number) {
 
   for (const p of room.remoteParticipants.values()) {
     const s = remoteState.get(p.identity);
-    const { distance, volume } = s ? audioLink(x, z, s.p[0], s.p[2]) : { distance: Infinity, volume: 0 };
+    // Lantai lain = tidak tersambung sama sekali.
+    const { distance, volume } = s && sameFloor(p.identity) ? audioLink(x, z, s.p[0], s.p[2]) : { distance: Infinity, volume: 0 };
 
     let subscribed = false;
     for (const pub of p.trackPublications.values()) {

@@ -3,7 +3,7 @@
 import {
   PROXIMITY,
   defaultLayout,
-  derive,
+  deriveFloor,
   ejectPoint,
   linkIn,
   zoneIn,
@@ -16,7 +16,7 @@ import {
 export { PROXIMITY, ejectPoint };
 export type { Door, Seat, Zone };
 
-let current: Derived = derive(defaultLayout());
+let current: Derived = deriveFloor(defaultLayout().floors[0]);
 
 export const setDerived = (d: Derived) => (current = d);
 export const world = () => current;

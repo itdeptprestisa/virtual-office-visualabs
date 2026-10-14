@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import {
   BoxGeometry,
@@ -172,11 +172,54 @@ function useMaterials(c: AvatarConfig) {
   return mats;
 }
 
+// Bayangan asli mahal (setiap bagian digambar ulang di shadow pass) → hanya untuk avatar sendiri.
+const ShadowCtx = createContext(true);
+
 function Part({ g, m, ...props }: { g: BufferGeometry; m: Material } & Record<string, unknown>) {
-  return <mesh geometry={g} material={m} castShadow {...props} />;
+  return <mesh geometry={g} material={m} castShadow={useContext(ShadowCtx)} {...props} />;
 }
 
-export function Character({ config: c, getAnim, handUp = false }: { config: AvatarConfig; getAnim: () => number; handUp?: boolean }) {
+// ---------- versi sederhana untuk avatar jauh (LOD): 4 bagian, tanpa tulang/sendi ----------
+
+const LOW = {
+  body: new CapsuleGeometry(0.22, 0.42, 3, 8),
+  legs: new CapsuleGeometry(0.17, 0.42, 3, 8),
+  head: new SphereGeometry(0.25, 12, 10),
+  hair: new SphereGeometry(0.27, 12, 6, 0, 2 * PI, 0, 0.55 * PI),
+};
+
+export function CharacterLow({ config: c, getAnim }: { config: AvatarConfig; getAnim: () => number }) {
+  const mat = useMaterials(c);
+  const root = useRef<Group>(null);
+  const seed = useMemo(() => Math.random() * 100, []);
+  useFrame((state) => {
+    if (!root.current) return;
+    const a = getAnim();
+    const t = state.clock.elapsedTime + seed;
+    const moving = a === ANIM.walk || a === ANIM.run;
+    root.current.position.y = a === ANIM.sit ? -0.37 : moving ? Math.abs(Math.sin(t * (a === ANIM.run ? 13 : 8.5))) * 0.05 : 0;
+  });
+  return (
+    <group ref={root}>
+      <mesh geometry={LOW.legs} material={c.bottom === "pants" ? mat.bottom : mat.skin} position={[0, 0.45, 0]} scale={[1.15, 1, 0.8]} />
+      <mesh geometry={LOW.body} material={mat.top} position={[0, 1.07, 0]} scale={[1.1, 1, 0.8]} />
+      <mesh geometry={LOW.head} material={mat.skin} position={[0, 1.57, 0]} />
+      {(c.hijab || c.hair !== "none") && <mesh geometry={LOW.hair} material={c.hijab ? mat.hijab : mat.hair} position={[0, 1.57, 0]} rotation-x={-0.35} />}
+    </group>
+  );
+}
+
+export function Character({
+  config: c,
+  getAnim,
+  handUp = false,
+  castShadows = true,
+}: {
+  config: AvatarConfig;
+  getAnim: () => number;
+  handUp?: boolean;
+  castShadows?: boolean;
+}) {
   const mat = useMaterials(c);
   const male = c.body === "male";
   const shoulderX = male ? 0.27 : 0.245;
@@ -243,6 +286,7 @@ export function Character({ config: c, getAnim, handUp = false }: { config: Avat
   );
 
   return (
+    <ShadowCtx.Provider value={castShadows}>
     <group ref={root}>
       <group position={[0, HIPS_Y, 0]}>
         <Part g={G.pelvis} m={mat.bottom} position={[0, 0.03, 0]} scale={male ? [1.02, 0.5, 0.74] : [1.04, 0.5, 0.74]} />
@@ -322,6 +366,7 @@ export function Character({ config: c, getAnim, handUp = false }: { config: Avat
         </group>
       </group>
     </group>
+    </ShadowCtx.Provider>
   );
 }
 

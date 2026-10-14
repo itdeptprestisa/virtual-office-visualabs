@@ -44,12 +44,14 @@ export const COLLIDERS: Partial<Record<ItemType, { half: V3; pos: V3 }>> = {
   counter: { half: [1.5, 0.5, 0.35], pos: [0, 0.5, 0] },
   fridge: { half: [0.4, 0.95, 0.35], pos: [0, 0.95, 0] },
   bookshelf: { half: [1, 1, 0.2], pos: [0, 1, 0] },
+  podium: { half: [0.32, 0.55, 0.25], pos: [0, 0.55, 0] },
+  elevator: { half: [1, 1.4, 0.3], pos: [0, 1.4, -0.1] },
 };
 
 /** Radius kira-kira (untuk lingkaran sorotan di editor). */
 export const FOOTPRINT: Record<ItemType, number> = {
   desk: 1.1, chair: 0.45, sofa: 1.3, tableLarge: 3.2, tableSmall: 1, coffeeTable: 1, rug: 4, plant: 0.5,
-  reception: 1.9, counter: 1.6, fridge: 0.6, bookshelf: 1.1, screen: 2.5, whiteboard: 1.4,
+  reception: 1.9, counter: 1.6, fridge: 0.6, bookshelf: 1.1, screen: 2.5, whiteboard: 1.4, podium: 0.5, elevator: 1.1,
 };
 
 function Desk() {
@@ -182,13 +184,54 @@ function Bookshelf() {
   );
 }
 
-function Screen({ room }: { room: string | null }) {
+function Screen({ zone, itemId }: { zone: string | null; itemId: string }) {
   return (
     <>
       <Box size={[4.95, 2.85, 0.06]} pos={[0, 1.75, -0.04]} color="#1b1d26" shadow={false} />
       <mesh position={[0, 1.75, 0]}>
         <planeGeometry args={[4.8, 2.7]} />
-        <PresentationMaterial room={room} />
+        <PresentationMaterial zone={zone} itemId={itemId} />
+      </mesh>
+    </>
+  );
+}
+
+function Podium() {
+  return (
+    <>
+      <Box size={[0.62, 1.05, 0.46]} pos={[0, 0.52, 0]} color={C.woodDark} />
+      <mesh position={[0, 1.08, 0.02]} rotation-x={-0.35} castShadow>
+        <boxGeometry args={[0.7, 0.05, 0.5]} />
+        <meshStandardMaterial color={C.wood} />
+      </mesh>
+      {/* mikrofon */}
+      <mesh position={[0.18, 1.25, 0.12]} rotation-x={0.6}>
+        <cylinderGeometry args={[0.012, 0.012, 0.32, 8]} />
+        <meshStandardMaterial color="#2f3340" />
+      </mesh>
+      <mesh position={[0.18, 1.38, 0.2]}>
+        <sphereGeometry args={[0.035, 12, 10]} />
+        <meshStandardMaterial color="#2f3340" roughness={0.4} />
+      </mesh>
+    </>
+  );
+}
+
+function Elevator() {
+  return (
+    <>
+      <Box size={[2, 2.8, 0.5]} pos={[0, 1.4, -0.15]} color="#cfd5dd" rough={0.35} />
+      <Box size={[0.68, 2.2, 0.05]} pos={[-0.35, 1.1, 0.12]} color="#aab2bd" rough={0.25} shadow={false} />
+      <Box size={[0.68, 2.2, 0.05]} pos={[0.35, 1.1, 0.12]} color="#aab2bd" rough={0.25} shadow={false} />
+      <Box size={[0.02, 2.2, 0.06]} pos={[0, 1.1, 0.13]} color="#7d8794" shadow={false} />
+      {/* penunjuk lantai & tombol panggil */}
+      <mesh position={[0, 2.45, 0.11]}>
+        <planeGeometry args={[0.6, 0.2]} />
+        <meshStandardMaterial color="#111" emissive="#ff8a3d" emissiveIntensity={0.6} />
+      </mesh>
+      <mesh position={[0.82, 1.15, 0.12]}>
+        <cylinderGeometry args={[0.05, 0.05, 0.03, 16]} />
+        <meshStandardMaterial color="#e0e4ea" emissive="#7ab8ff" emissiveIntensity={0.5} />
       </mesh>
     </>
   );
@@ -207,7 +250,7 @@ function Whiteboard({ room }: { room: string | null }) {
   );
 }
 
-export function Furniture({ type, room }: { type: ItemType; room: string | null }) {
+export function Furniture({ type, room, zone, itemId }: { type: ItemType; room: string | null; zone: string | null; itemId: string }) {
   switch (type) {
     case "desk":
       return <Desk />;
@@ -249,7 +292,11 @@ export function Furniture({ type, room }: { type: ItemType; room: string | null 
     case "bookshelf":
       return <Bookshelf />;
     case "screen":
-      return <Screen room={room} />;
+      return <Screen zone={zone} itemId={itemId} />;
+    case "podium":
+      return <Podium />;
+    case "elevator":
+      return <Elevator />;
     case "whiteboard":
       return <Whiteboard room={room} />;
   }

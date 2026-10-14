@@ -12,6 +12,7 @@ import {
   randomAvatar,
   type AvatarConfig,
 } from "./config";
+import { t, useT } from "../i18n";
 
 const PREVIEW_ANIMS = [
   { label: "Diam", anim: ANIM.idle },
@@ -21,6 +22,7 @@ const PREVIEW_ANIMS = [
 ];
 
 function Preview({ config }: { config: AvatarConfig }) {
+  useT();
   const [anim, setAnim] = useState<number>(ANIM.idle);
   return (
     <div className="preview">
@@ -35,11 +37,11 @@ function Preview({ config }: { config: AvatarConfig }) {
       <div className="preview-anims">
         {PREVIEW_ANIMS.map((a) => (
           <button key={a.label} type="button" className={anim === a.anim ? "chip active" : "chip"} onClick={() => setAnim(a.anim)}>
-            {a.label}
+            {t(a.label)}
           </button>
         ))}
       </div>
-      <p className="hint">Geser untuk memutar</p>
+      <p className="hint">{t("Geser untuk memutar")}</p>
     </div>
   );
 }
@@ -47,7 +49,7 @@ function Preview({ config }: { config: AvatarConfig }) {
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="row">
-      <div className="row-label">{label}</div>
+      <div className="row-label">{t(label)}</div>
       <div className="row-body">{children}</div>
     </div>
   );
@@ -58,7 +60,7 @@ function Chips<T extends string>({ options, value, onChange, disabled }: { optio
     <div className="chips">
       {options.map((o) => (
         <button key={o} type="button" disabled={disabled} className={o === value ? "chip active" : "chip"} onClick={() => onChange(o)}>
-          {LABELS[o] ?? o}
+          {t(LABELS[o] ?? o)}
         </button>
       ))}
     </div>
@@ -75,11 +77,11 @@ function Colors({ palette, value, onChange, custom = true }: { palette: string[]
           className={c.toLowerCase() === value.toLowerCase() ? "swatch active" : "swatch"}
           style={{ background: c }}
           onClick={() => onChange(c)}
-          aria-label={`Warna ${c}`}
+          aria-label={`${t("Warna")} ${c}`}
         />
       ))}
       {custom && (
-        <label className="swatch custom" title="Warna lain">
+        <label className="swatch custom" title={t("Warna lain")}>
           <input type="color" value={value} onChange={(e) => onChange(e.target.value)} />
         </label>
       )}
@@ -95,6 +97,7 @@ interface Props {
 }
 
 export function AvatarEditor({ value: c, onChange, header, footer }: Props) {
+  useT();
   const set = <K extends keyof AvatarConfig>(key: K, v: AvatarConfig[K]) => onChange({ ...c, [key]: v });
 
   return (
@@ -141,7 +144,7 @@ export function AvatarEditor({ value: c, onChange, header, footer }: Props) {
         </div>
         <div className="editor-footer">
           <button type="button" className="secondary" onClick={() => onChange(randomAvatar())}>
-            🎲 Acak
+            🎲 {t("Acak")}
           </button>
           {footer}
         </div>

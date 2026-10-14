@@ -52,6 +52,10 @@ class Client {
       }, ms);
     });
   }
+  /** Buang pesan lama bertipe `t` yang belum dibaca. */
+  drain(t: string) {
+    this.inbox = this.inbox.filter((m) => m.t !== t);
+  }
   /** Pastikan TIDAK menerima pesan tertentu dalam `ms`. */
   async none(t: string, extra: (m: any) => boolean = () => true, ms = 400) {
     const from = this.inbox.length; // hanya pesan yang datang setelah titik ini
@@ -99,6 +103,7 @@ after(async () => {
 });
 
 const ids: Record<string, string> = {};
+let inviteCode = "";
 let adminC: Client;
 let budiToken = "";
 
@@ -111,12 +116,13 @@ test("pendaftar pertama jadi admin; validasi username & password", async () => {
   ids.admin = res.user.id;
   adminC = c;
   const w = await c.enter([0, 0, 9]);
-  assert.equal(w.layout.rooms.length >= 1, true);
+  assert.equal(w.layout.floors[0].rooms.length >= 1, true);
 });
 
 test("mode undangan: daftar tanpa kode ditolak, dengan kode diterima", async () => {
   adminC.send({ t: "admin", action: "registration", mode: "invite" });
   const st = await adminC.wait("admin_state", (m) => m.registration === "invite");
+  inviteCode = st.inviteCode;
   const fail = await register("budi");
   assert.equal(fail.res.t, "auth_error");
   fail.c.close();
@@ -206,19 +212,20 @@ test("meja: klaim tersimpan; satu orang satu meja; hanya admin bisa ubah denah",
   budi.send({ t: "resume", token: budiToken });
   await budi.wait("auth_ok");
   const w = await budi.enter([0, 0, 9]);
-  const desk = `desk:${w.layout.items.find((i: any) => i.type === "desk").id}`;
+  const desk = `desk:${w.layout.floors[0].items.find((i: any) => i.type === "desk").id}`;
   budi.send({ t: "desk", action: "claim", id: desk });
   await budi.wait("world", (m) => m.desks[desk]?.ownerId === ids.budi);
 
   // Member tidak boleh mengubah denah
-  budi.send({ t: "layout", layout: { ...w.layout, items: [] } });
+  const withItems = (items: any[]) => ({ ...w.layout, floors: [{ ...w.layout.floors[0], items }, ...w.layout.floors.slice(1)] });
+  budi.send({ t: "layout", layout: withItems([]) });
   await adminC.none("layout");
   // Admin boleh; denah rusak ditolak
   adminC.send({ t: "layout", layout: { rooms: "x" } });
   await adminC.wait("notice");
-  adminC.send({ t: "layout", layout: { ...w.layout, items: w.layout.items.filter((i: any) => i.type !== "plant") } });
+  adminC.send({ t: "layout", layout: withItems(w.layout.floors[0].items.filter((i: any) => i.type !== "plant")) });
   const lay = await budi.wait("layout");
-  assert.ok(!lay.layout.items.some((i: any) => i.type === "plant"));
+  assert.ok(!lay.layout.floors[0].items.some((i: any) => i.type === "plant"));
   budi.close();
 });
 
@@ -233,4 +240,145 @@ test("koneksi kedua akun yang sama mengeluarkan koneksi lama", async () => {
   await b.enter([0, 0, 9]);
   assert.match((await a.wait("kicked")).reason, /tab atau perangkat lain/);
   b.close();
+});
+
+// ---------- fitur lanjutan ----------
+
+async function member(username: string) {
+  const { c, res } = await register(username, { invite: inviteCode });
+  assert.equal(res.t, "auth_ok", `daftar ${username}`);
+  return { c, id: res.user.id as string, token: res.token as string };
+}
+
+test("panggung di lantai 2 terdengar ke seluruh lantai kecuali ruangan; lantai lain tidak", async () => {
+  const dodi = await member("dodi");
+  const eva = await member("eva");
+  const fajar = await member("fajar");
+  await dodi.c.enter([0, 0, 9]);
+  await eva.c.enter([0, 0, 9]);
+  await fajar.c.enter([0, 0, 9]);
+  dodi.c.send({ t: "floor", floor: "f2", p: [-9.75, 0, -10] }); // panggung aula
+  eva.c.send({ t: "floor", floor: "f2", p: [10.5, 0, 7.5] }); // taman atap
+  fajar.c.send({ t: "floor", floor: "f2", p: [10.9, 0, -8] }); // ruang kolaborasi
+  await sleep(300);
+  dodi.c.send({ t: "chat", channel: "area", text: "pengumuman all-hands" });
+  const got = await eva.c.wait("chat", (m) => m.text === "pengumuman all-hands");
+  assert.equal(got.scope, "Panggung Aula");
+  await fajar.c.none("chat", (m) => m.text === "pengumuman all-hands");
+  await adminC.none("chat", (m) => m.text === "pengumuman all-hands"); // lantai 1
+  for (const x of [dodi, eva, fajar]) x.c.close();
+});
+
+test("ganti password sendiri & reset password oleh admin", async () => {
+  const gita = await member("gita");
+  await gita.c.enter([0, 0, 9]);
+  gita.c.send({ t: "password", old: "salah", new: "barubaru1" });
+  assert.match((await gita.c.wait("notice")).text, /lama salah/);
+  gita.c.send({ t: "password", old: "rahasia123", new: "barubaru1" });
+  await gita.c.wait("password_ok");
+  const c2 = await new Client().open();
+  c2.send({ t: "login", username: "gita", password: "barubaru1" });
+  await c2.wait("auth_ok");
+  c2.close();
+  adminC.send({ t: "admin", action: "reset_password", userId: gita.id });
+  const temp = await adminC.wait("temp_password", (m) => m.userId === gita.id);
+  assert.match((await gita.c.wait("kicked")).reason, /direset/);
+  const c3 = await new Client().open();
+  c3.send({ t: "login", username: "gita", password: temp.password });
+  await c3.wait("auth_ok");
+  c3.close();
+});
+
+test("link tamu: masuk tanpa akun, tidak bisa klaim meja, link bisa dicabut", async () => {
+  adminC.drain("admin_state");
+  adminC.send({ t: "admin", action: "guest_link", hours: 2, label: "Klien PT Maju" });
+  const st = await adminC.wait("admin_state", (m) => m.guestLinks.some((g: any) => g.label === "Klien PT Maju"));
+  const link = st.guestLinks.find((g: any) => g.label === "Klien PT Maju").token;
+  const g = await new Client().open();
+  g.send({ t: "guest", token: link, name: "Pak Tamu" });
+  const ok = await g.wait("auth_ok");
+  assert.equal(ok.user.role, "guest");
+  const w = await g.enter([0, 0, 9]);
+  const desk = `desk:${w.layout.floors[0].items.find((i: any) => i.type === "desk").id}`;
+  g.send({ t: "desk", action: "claim", id: desk });
+  assert.match((await g.wait("notice")).text, /Tamu/);
+  adminC.send({ t: "admin", action: "guest_revoke", token: link });
+  await adminC.wait("admin_state", (m) => !m.guestLinks.some((x: any) => x.token === link));
+  const g2 = await new Client().open();
+  g2.send({ t: "guest", token: link, name: "Penyusup" });
+  assert.match((await g2.wait("auth_error")).reason, /tidak berlaku/);
+  g.close();
+  g2.close();
+});
+
+test("booking ruangan: bentrok ditolak, booking sah disiarkan", async () => {
+  const hana = await member("hana");
+  await hana.c.enter([0, 0, 9]);
+  const start = Date.now() + 3600_000;
+  hana.c.send({ t: "book", room: "meeting", title: "Sprint review", start, end: start + 3600_000 });
+  const b = await adminC.wait("bookings", (m) => m.list.some((x: any) => x.title === "Sprint review"));
+  hana.c.send({ t: "book", room: "meeting", title: "Bentrok", start: start + 1800_000, end: start + 5400_000 });
+  assert.match((await hana.c.wait("notice")).text, /Bentrok dengan "Sprint review"/);
+  hana.c.send({ t: "book", room: "meeting", title: "Kilat", start, end: start + 5 * 60_000 });
+  assert.match((await hana.c.wait("notice")).text, /15 menit/);
+  const id = b.list.find((x: any) => x.title === "Sprint review").id;
+  hana.c.send({ t: "unbook", id });
+  await adminC.wait("bookings", (m) => !m.list.some((x: any) => x.id === id));
+  hana.c.close();
+});
+
+test("upload: gambar tampil inline, HTML dipaksa unduh; lampiran ikut di chat", async () => {
+  const ika = await member("ika");
+  await ika.c.enter([0, 0, 9]);
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a5d20000000049454e44ae426082", "hex");
+  ika.c.send({ t: "upload", req: 1, name: "foto.png", mime: "image/png", data: png.toString("base64") });
+  const up = await ika.c.wait("upload_ok", (m) => m.req === 1);
+  const res = await fetch(`http://localhost:${PORT}/files/${up.file.id}/foto.png`);
+  assert.equal(res.headers.get("content-type"), "image/png");
+  assert.equal(Buffer.from(await res.arrayBuffer()).equals(png), true);
+  ika.c.send({ t: "upload", req: 2, name: "jahat.html", mime: "text/html", data: Buffer.from("<script>alert(1)</script>").toString("base64") });
+  const up2 = await ika.c.wait("upload_ok", (m) => m.req === 2);
+  const res2 = await fetch(`http://localhost:${PORT}/files/${up2.file.id}/jahat.html`);
+  assert.equal(res2.headers.get("content-type"), "application/octet-stream");
+  assert.match(res2.headers.get("content-disposition") ?? "", /^attachment/);
+  ika.c.send({ t: "upload", req: 3, name: "besar.bin", mime: "application/octet-stream", data: Buffer.alloc(6 * 1024 * 1024).toString("base64") });
+  assert.match((await ika.c.wait("upload_error", (m) => m.req === 3)).reason, /5 MB/);
+  ika.c.send({ t: "chat", channel: "umum", text: "lihat ini", file: { id: up.file.id } });
+  const c = await adminC.wait("chat", (m) => m.text === "lihat ini");
+  assert.equal(c.file.name, "foto.png");
+  ika.c.close();
+});
+
+test("reaksi emoji & pencarian pesan (DM orang lain tidak ikut)", async () => {
+  const joni = await member("joni");
+  await joni.c.enter([0, 0, 9]);
+  joni.c.send({ t: "chat", channel: "umum", text: "deploy jumat sore? 🤔" });
+  const m = await adminC.wait("chat", (x) => x.text === "deploy jumat sore? 🤔");
+  adminC.send({ t: "react", channel: "umum", id: m.mid, emoji: "👀" });
+  const r = await joni.c.wait("reaction", (x) => x.id === m.mid);
+  assert.deepEqual(r.reactions["👀"], [ids.admin]);
+  adminC.send({ t: "react", channel: "umum", id: m.mid, emoji: "💩" }); // bukan emoji yang diizinkan
+  await joni.c.none("reaction", (x) => x.reactions["💩"]);
+  joni.c.send({ t: "search", q: "JUMAT" });
+  const s = await joni.c.wait("search_result");
+  assert.ok(s.results.some((x: any) => x.text.includes("jumat")));
+  joni.c.send({ t: "search", q: "psst" }); // DM budi→cici dari tes sebelumnya
+  assert.equal((await joni.c.wait("search_result", (x) => x.q === "psst")).results.length, 0);
+  joni.c.close();
+});
+
+test("website di layar presentasi: hanya dari dalam ruangannya & wajib https", async () => {
+  const kiki = await member("kiki");
+  const w = await kiki.c.enter([0, 0, 9]);
+  const screen = w.layout.floors[0].items.find((i: any) => i.type === "screen" && i.x > 4).id;
+  kiki.c.send({ t: "screen_url", item: screen, url: "https://example.com" });
+  assert.match((await kiki.c.wait("notice")).text, /Masuk ke ruangan/);
+  kiki.c.move([10, 0, -4]);
+  await sleep(150);
+  kiki.c.send({ t: "screen_url", item: screen, url: "http://tidak-aman.com" });
+  assert.match((await kiki.c.wait("notice")).text, /https/);
+  kiki.c.send({ t: "screen_url", item: screen, url: "https://example.com" });
+  const s = await adminC.wait("screens", (m) => m.map[screen] === "https://example.com");
+  assert.ok(s);
+  kiki.c.close();
 });

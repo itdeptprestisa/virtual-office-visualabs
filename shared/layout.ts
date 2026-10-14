@@ -1,6 +1,6 @@
 // Model denah kantor — dipakai bersama oleh server & client.
-// Denah = ruangan (berdinding kaca + pintu), area terbuka, dan furnitur. Area meja, pintu, kursi & dinding
-// diturunkan otomatis dari data ini, sehingga denah bisa diubah lewat editor tanpa menyentuh kode.
+// Denah = beberapa lantai; tiap lantai berisi ruangan (dinding kaca + pintu), area terbuka, dan furnitur.
+// Area meja, pintu, kursi & dinding diturunkan otomatis dari data ini, sehingga denah bisa diubah lewat editor.
 
 export const WORLD = { halfW: 18, halfD: 13, wallH: 3 };
 
@@ -25,6 +25,8 @@ export const ITEM_TYPES = [
   "bookshelf",
   "screen",
   "whiteboard",
+  "podium",
+  "elevator",
 ] as const;
 export type ItemType = (typeof ITEM_TYPES)[number];
 
@@ -43,6 +45,8 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   bookshelf: "Rak buku",
   screen: "Layar presentasi",
   whiteboard: "Whiteboard",
+  podium: "Podium",
+  elevator: "Lift",
 };
 
 export type Quarter = 0 | 1 | 2 | 3; // rotasi kelipatan 90°
@@ -66,22 +70,32 @@ export interface Room {
   color: string;
 }
 
-export type Area = { id: string; name: string; color: string } & (
+export type Area = { id: string; name: string; color: string; stage?: boolean } & (
   | { shape: "rect"; x: [number, number]; z: [number, number] }
   | { shape: "circle"; cx: number; cz: number; r: number }
 );
 
-export interface Layout {
-  version: 1;
+export interface Floor {
+  id: string;
+  name: string;
   rooms: Room[];
   areas: Area[];
   items: Item[];
 }
 
-export type Zone = { id: string; name: string; color: string; kind: "desk" | "room" | "area"; refId: string } & (
-  | { shape: "rect"; x: [number, number]; z: [number, number] }
-  | { shape: "circle"; cx: number; cz: number; r: number }
-);
+export interface Layout {
+  version: 2;
+  floors: Floor[];
+}
+
+export type Zone = {
+  id: string;
+  name: string;
+  color: string;
+  kind: "desk" | "room" | "area";
+  refId: string;
+  stage?: boolean; // panggung: yang berdiri di sini terdengar oleh semua orang di lantai (kecuali di dalam ruangan)
+} & ({ shape: "rect"; x: [number, number]; z: [number, number] } | { shape: "circle"; cx: number; cz: number; r: number });
 
 export interface Door {
   id: string; // = id ruangan
@@ -105,6 +119,14 @@ export interface WallSegment {
   orient: "x" | "z";
   a: [number, number];
   c: number;
+}
+
+export interface Elevator {
+  itemId: string;
+  x: number;
+  z: number;
+  exit: [number, number]; // titik keluar di depan pintu lift
+  yaw: number;
 }
 
 // ---------- geometri ----------
@@ -133,31 +155,33 @@ const SEATS: Partial<Record<ItemType, { lx: number; lz: number; yaw: number; sta
   sofa: [-0.7, 0, 0.7].map((lx) => ({ lx, lz: 0.08, yaw: 0, stand: 0.85 })),
 };
 
-// ---------- turunan ----------
+// ---------- turunan per lantai ----------
 
 export interface Derived {
+  floorId: string;
   zones: Zone[];
   doors: Door[];
   seats: Seat[];
   walls: WallSegment[];
+  elevators: Elevator[];
 }
 
-export function derive(layout: Layout): Derived {
+export function deriveFloor(floor: Floor): Derived {
   const zones: Zone[] = [];
   let deskNo = 0;
-  for (const it of layout.items) {
+  for (const it of floor.items) {
     if (it.type !== "desk") continue;
     deskNo++;
     zones.push({ id: `desk:${it.id}`, name: `Meja ${deskNo}`, color: "#e0a458", kind: "desk", refId: it.id, shape: "rect", ...rectToWorld(it, -0.95, 0.95, -0.6, 1.4) });
   }
-  for (const r of layout.rooms) {
+  for (const r of floor.rooms) {
     zones.push({ id: `room:${r.id}`, name: r.name, color: r.color, kind: "room", refId: r.id, shape: "rect", x: [r.x[0] + 0.1, r.x[1] - 0.1], z: [r.z[0] + 0.1, r.z[1] - 0.1] });
   }
-  for (const a of layout.areas) {
+  for (const a of floor.areas) {
     zones.push({ ...a, id: `area:${a.id}`, kind: "area", refId: a.id } as Zone);
   }
 
-  const doors: Door[] = layout.rooms.map((r) => {
+  const doors: Door[] = floor.rooms.map((r) => {
     const { side, center, width } = r.door;
     const orient = side === "n" || side === "s" ? "x" : "z";
     const c = side === "n" ? r.z[0] : side === "s" ? r.z[1] : side === "w" ? r.x[0] : r.x[1];
@@ -165,20 +189,22 @@ export function derive(layout: Layout): Derived {
   });
 
   const seats: Seat[] = [];
-  for (const it of layout.items) {
+  const elevators: Elevator[] = [];
+  for (const it of floor.items) {
     (SEATS[it.type] ?? []).forEach((s, i) => {
       const [x, z] = toWorld(it, s.lx, s.lz);
       const yaw = angleOf(it.rot) + s.yaw;
       const stand: [number, number] = [x + Math.sin(yaw) * s.stand, z + Math.cos(yaw) * s.stand];
       seats.push({ id: `${it.id}:${i}`, itemId: it.id, x, z, yaw, stand });
     });
+    if (it.type === "elevator") elevators.push({ itemId: it.id, x: it.x, z: it.z, exit: toWorld(it, 0, 1.2), yaw: angleOf(it.rot) });
   }
 
   // Dinding kaca ruangan: 4 sisi minus celah pintu; sisi yang menempel dinding luar dilewati.
   const walls: WallSegment[] = [];
   const onOuter = (orient: "x" | "z", c: number) =>
     orient === "x" ? Math.abs(Math.abs(c) - WORLD.halfD) < 0.35 : Math.abs(Math.abs(c) - WORLD.halfW) < 0.35;
-  for (const r of layout.rooms) {
+  for (const r of floor.rooms) {
     const sides: [Side, "x" | "z", [number, number], number][] = [
       ["n", "x", r.x, r.z[0]],
       ["s", "x", r.x, r.z[1]],
@@ -197,7 +223,12 @@ export function derive(layout: Layout): Derived {
       }
     }
   }
-  return { zones, doors, seats, walls };
+  return { floorId: floor.id, zones, doors, seats, walls, elevators };
+}
+
+/** Turunan semua lantai, dikunci id lantai. */
+export function derive(layout: Layout): Record<string, Derived> {
+  return Object.fromEntries(layout.floors.map((f) => [f.id, deriveFloor(f)]));
 }
 
 export function inZone(zn: Zone, x: number, z: number) {
@@ -209,10 +240,17 @@ export function zoneIn(d: Derived, x: number, z: number): Zone | null {
   return d.zones.find((zn) => inZone(zn, x, z)) ?? null;
 }
 
-/** Aturan siapa mendengar siapa. distance = jarak efektif untuk langganan track (0 = satu area), volume 0..1. */
+/**
+ * Aturan siapa mendengar siapa, dari sudut pendengar (a) terhadap pembicara (b) di lantai yang sama.
+ * distance = jarak efektif untuk langganan track (0 = tersambung penuh), volume 0..1.
+ *   - Pembicara di panggung → terdengar penuh oleh semua orang di lantai, kecuali yang di dalam ruangan.
+ *   - Salah satu di area → tersambung penuh hanya bila areanya sama.
+ *   - Keduanya di luar area → radius dekat (PROXIMITY).
+ */
 export function linkIn(d: Derived, ax: number, az: number, bx: number, bz: number): { distance: number; volume: number } {
   const za = zoneIn(d, ax, az);
   const zb = zoneIn(d, bx, bz);
+  if (zb?.stage && za?.kind !== "room") return { distance: 0, volume: 1 };
   if (za || zb) return za?.id === zb?.id ? { distance: 0, volume: 1 } : { distance: Infinity, volume: 0 };
   const { full, hear } = PROXIMITY;
   const distance = Math.hypot(bx - ax, bz - az);
@@ -242,8 +280,7 @@ export function ejectPoint(zn: Zone, x: number, z: number, margin = 0.45): [numb
 let seq = 0;
 const it = (type: ItemType, x: number, z: number, rot: Quarter = 0): Item => ({ id: `i${++seq}`, type, x, z, rot });
 
-function defaultItems(): Item[] {
-  seq = 0;
+function floor1(): Floor {
   const items: Item[] = [];
   // Area kerja
   for (const row of [-9.5, -5.5, -1.5]) for (const col of [-14.5, -12.5, -8.5, -6.5]) items.push(it("desk", col, row));
@@ -257,18 +294,17 @@ function defaultItems(): Item[] {
   }
   // Lounge
   items.push(it("rug", 12, 7.5), it("sofa", 12, 4.5, 0), it("sofa", 15.2, 7.5, 3), it("sofa", 8.8, 7.5, 1), it("coffeeTable", 12, 7.5));
-  items.push(it("plant", 16.8, 3), it("plant", 16.8, 12));
+  items.push(it("plant", 16.8, 3));
   // Resepsionis
   items.push(it("reception", 0, 4), it("plant", -2.6, 4), it("plant", 2.6, 4));
   // Pantry
   items.push(it("counter", -13.5, 12.2, 2), it("fridge", -16.9, 12.1, 2), it("tableSmall", -13, 7.6));
   items.push(it("chair", -13, 6.7, 0), it("chair", -13, 8.5, 2), it("plant", -17, 4.2));
-  return items;
-}
-
-export function defaultLayout(): Layout {
+  // Lift ke lantai lain (pojok tenggara, menghadap utara)
+  items.push(it("elevator", 16.9, 11.9, 2));
   return {
-    version: 1,
+    id: "f1",
+    name: "Lantai 1",
     rooms: [
       { id: "meeting", name: "Ruang Meeting", x: [4, 17.85], z: [-12.85, -2], door: { side: "s", center: 9.875, width: 2.75 }, color: "#5b8def" },
       { id: "fokus-a", name: "Ruang Fokus A", x: [-4.6, -0.4], z: [-12.85, -8], door: { side: "s", center: -2.5, width: 1.6 }, color: "#8b7cf6" },
@@ -278,8 +314,39 @@ export function defaultLayout(): Layout {
       { id: "lounge", name: "Lounge", color: "#e8707f", shape: "circle", cx: 12, cz: 7.5, r: 4.3 },
       { id: "pantry", name: "Pantry", color: "#4fae7d", shape: "rect", x: [-17.6, -9.5], z: [3.4, 12.7] },
     ],
-    items: defaultItems(),
+    items,
   };
+}
+
+function floor2(): Floor {
+  const items: Item[] = [];
+  // Aula: panggung + podium + layar, kursi penonton menghadap panggung (utara)
+  items.push(it("podium", -9.75, -10.6, 0), it("screen", -9.75, -12.75), it("plant", -13.6, -12), it("plant", -5.9, -12));
+  for (const z of [-7.4, -6.0, -4.6, -3.2]) for (let x = -15.6; x <= -3.9; x += 1.3) items.push(it("chair", Math.round(x * 100) / 100, z, 2));
+  // Ruang Kolaborasi
+  items.push(it("tableLarge", 10.9, -8.4), it("screen", 10.9, -12.75), it("whiteboard", 17.55, -8.4, 3));
+  for (const dx of [-2.2, -0.7, 0.8, 2.3]) items.push(it("chair", 10.9 + dx, -10, 0), it("chair", 10.9 + dx, -6.8, 2));
+  // Hot desk
+  for (const col of [-14.5, -12.5, -8.5, -6.5]) items.push(it("desk", col, 4.5));
+  // Taman atap
+  items.push(it("rug", 10.5, 7.5), it("sofa", 10.5, 4.6, 0), it("sofa", 10.5, 10.4, 2), it("coffeeTable", 10.5, 7.5));
+  for (const [x, z] of [[6.5, 4], [6.5, 11], [14.5, 4], [14.5, 11], [16.8, 2.2]]) items.push(it("plant", x, z));
+  items.push(it("elevator", 16.9, 11.9, 2));
+  return {
+    id: "f2",
+    name: "Lantai 2",
+    rooms: [{ id: "kolaborasi", name: "Ruang Kolaborasi", x: [4, 17.85], z: [-12.85, -4], door: { side: "s", center: 10.9, width: 2.75 }, color: "#3fa7a0" }],
+    areas: [
+      { id: "panggung", name: "Panggung Aula", color: "#f2994a", shape: "rect", x: [-13.6, -5.9], z: [-12.85, -9.3], stage: true },
+      { id: "taman", name: "Taman Atap", color: "#4fae7d", shape: "circle", cx: 10.5, cz: 7.5, r: 4.2 },
+    ],
+    items,
+  };
+}
+
+export function defaultLayout(): Layout {
+  seq = 0;
+  return { version: 2, floors: [floor1(), floor2()] };
 }
 
 // ---------- validasi (server memakai ini untuk denah kiriman editor) ----------
@@ -297,54 +364,71 @@ function span(v: unknown, lim: number): [number, number] | null {
   return [a, b];
 }
 
-export function sanitizeLayout(raw: unknown): Layout | null {
-  if (!raw || typeof raw !== "object") return null;
-  const src = raw as Record<string, unknown>;
+function sanitizeFloor(src: Record<string, unknown>, uniq: (id: unknown) => string | null): Floor | null {
   if (!Array.isArray(src.rooms) || !Array.isArray(src.areas) || !Array.isArray(src.items)) return null;
   if (src.rooms.length > 20 || src.areas.length > 20 || src.items.length > 600) return null;
-  const ids = new Set<string>();
-  const uniq = (id: unknown) => (typeof id === "string" && ID.test(id) && !ids.has(id) ? (ids.add(id), id) : null);
+  const id = uniq(src.id);
+  const name = str(src.name, 40);
+  if (!id || !name) return null;
 
   const rooms: Room[] = [];
   for (const r of src.rooms as Record<string, any>[]) {
-    const id = uniq(r?.id);
-    const name = str(r?.name, 40);
+    const rid = uniq(r?.id);
+    const rname = str(r?.name, 40);
     const x = span(r?.x, WORLD.halfW);
     const z = span(r?.z, WORLD.halfD);
     const side = ["n", "s", "e", "w"].includes(r?.door?.side) ? (r.door.side as Side) : null;
     const center = num(r?.door?.center, -WORLD.halfW, WORLD.halfW);
     const width = num(r?.door?.width, 0.9, 4);
-    if (!id || !name || !x || !z || !side || center === null || width === null) return null;
-    rooms.push({ id, name, x, z, door: { side, center, width }, color: HEX.test(r?.color) ? r.color : "#5b8def" });
+    if (!rid || !rname || !x || !z || !side || center === null || width === null) return null;
+    rooms.push({ id: rid, name: rname, x, z, door: { side, center, width }, color: HEX.test(r?.color) ? r.color : "#5b8def" });
   }
   const areas: Area[] = [];
   for (const a of src.areas as Record<string, any>[]) {
-    const id = uniq(a?.id);
-    const name = str(a?.name, 40);
+    const aid = uniq(a?.id);
+    const aname = str(a?.name, 40);
     const color = HEX.test(a?.color) ? a.color : "#4fae7d";
-    if (!id || !name) return null;
+    const stage = a?.stage === true ? { stage: true } : {};
+    if (!aid || !aname) return null;
     if (a.shape === "circle") {
       const cx = num(a.cx, -WORLD.halfW, WORLD.halfW);
       const cz = num(a.cz, -WORLD.halfD, WORLD.halfD);
       const r = num(a.r, 0.5, 15);
       if (cx === null || cz === null || r === null) return null;
-      areas.push({ id, name, color, shape: "circle", cx, cz, r });
+      areas.push({ id: aid, name: aname, color, ...stage, shape: "circle", cx, cz, r });
     } else {
       const x = span(a.x, WORLD.halfW);
       const z = span(a.z, WORLD.halfD);
       if (!x || !z) return null;
-      areas.push({ id, name, color, shape: "rect", x, z });
+      areas.push({ id: aid, name: aname, color, ...stage, shape: "rect", x, z });
     }
   }
   const items: Item[] = [];
   for (const i of src.items as Record<string, any>[]) {
-    const id = uniq(i?.id);
+    const iid = uniq(i?.id);
     const type = (ITEM_TYPES as readonly string[]).includes(i?.type) ? (i.type as ItemType) : null;
     const x = num(i?.x, -WORLD.halfW, WORLD.halfW);
     const z = num(i?.z, -WORLD.halfD, WORLD.halfD);
     const rot = [0, 1, 2, 3].includes(i?.rot) ? (i.rot as Quarter) : null;
-    if (!id || !type || x === null || z === null || rot === null) return null;
-    items.push({ id, type, x, z, rot });
+    if (!iid || !type || x === null || z === null || rot === null) return null;
+    items.push({ id: iid, type, x, z, rot });
   }
-  return { version: 1, rooms, areas, items };
+  return { id, name, rooms, areas, items };
+}
+
+/** Validasi denah (v2), sekaligus menerima denah lama v1 (satu lantai) dan mengubahnya ke v2. */
+export function sanitizeLayout(raw: unknown): Layout | null {
+  if (!raw || typeof raw !== "object") return null;
+  const src = raw as Record<string, unknown>;
+  const ids = new Set<string>();
+  const uniq = (id: unknown) => (typeof id === "string" && ID.test(id) && !ids.has(id) ? (ids.add(id), id) : null);
+  const floorsRaw = Array.isArray(src.floors) ? src.floors : Array.isArray(src.items) ? [{ id: "f1", name: "Lantai 1", ...src }] : null;
+  if (!floorsRaw || floorsRaw.length < 1 || floorsRaw.length > 10) return null;
+  const floors: Floor[] = [];
+  for (const f of floorsRaw) {
+    const fl = f && typeof f === "object" ? sanitizeFloor(f as Record<string, unknown>, uniq) : null;
+    if (!fl) return null;
+    floors.push(fl);
+  }
+  return { version: 2, floors };
 }

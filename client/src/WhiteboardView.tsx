@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEven
 import { CanvasTexture, SRGBColorSpace } from "three";
 import { clearBoard, drawStroke, paint, useWhiteboard, type Stroke } from "./whiteboard";
 import { useNet } from "./net";
+import { place, t, useT } from "./i18n";
 
 const TEX_W = 1024;
 const TEX_H = 552; // rasio 2,6 × 1,4
@@ -27,7 +28,7 @@ export function WhiteboardMaterial({ room }: { room: string | null }) {
       ctx.fillStyle = "#9aa1ad";
       ctx.font = "28px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Masuk ruangan untuk melihat whiteboard", TEX_W / 2, TEX_H / 2);
+      ctx.fillText(t("Masuk ruangan untuk melihat whiteboard"), TEX_W / 2, TEX_H / 2);
     }
     texture.needsUpdate = true;
   }, [inside, strokes, canvas, texture]);
@@ -41,9 +42,10 @@ const ERASER = "#ffffff";
 
 /** Jendela menggambar whiteboard bersama (orang di ruangan yang sama melihat coretan secara langsung). */
 export function WhiteboardModal() {
+  useT();
   const room = useWhiteboard((s) => s.open);
   const strokes = useWhiteboard((s) => (room ? s.boards[room] : undefined));
-  const roomName = useNet((s) => s.layout?.rooms.find((r) => r.id === room)?.name ?? "Whiteboard");
+  const roomName = useNet((s) => s.layout?.floors.flatMap((f) => f.rooms).find((r) => r.id === room)?.name ?? "Whiteboard");
   const inside = useNet((s) => !!room && s.zoneId === `room:${room}`);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const current = useRef<Stroke | null>(null);
@@ -99,24 +101,24 @@ export function WhiteboardModal() {
     <div className="overlay modal" onKeyDown={(e) => e.key === "Escape" && close()}>
       <div className="wb">
         <div className="wb-head">
-          <b>📝 {roomName}</b>
+          <b>📝 {place(roomName)}</b>
           <div className="wb-tools">
             {COLORS.map((c) => (
-              <button key={c} className={c === color ? "swatch active" : "swatch"} style={{ background: c }} onClick={() => setColor(c)} aria-label={`Warna ${c}`} />
+              <button key={c} className={c === color ? "swatch active" : "swatch"} style={{ background: c }} onClick={() => setColor(c)} aria-label={`${t("Warna")} ${c}`} />
             ))}
             <button className={color === ERASER ? "chip active" : "chip"} onClick={() => setColor(ERASER)}>
-              Penghapus
+              {t("Penghapus")}
             </button>
-            <select value={width} onChange={(e) => setWidth(Number(e.target.value))} aria-label="Tebal garis">
-              <option value={3}>Tipis</option>
-              <option value={6}>Sedang</option>
-              <option value={12}>Tebal</option>
+            <select value={width} onChange={(e) => setWidth(Number(e.target.value))} aria-label={t("Tebal garis")}>
+              <option value={3}>{t("Tipis")}</option>
+              <option value={6}>{t("Sedang")}</option>
+              <option value={12}>{t("Tebal")}</option>
             </select>
-            <button className="chip" onClick={() => confirm("Hapus semua coretan untuk semua orang?") && clearBoard(room)}>
-              Bersihkan
+            <button className="chip" onClick={() => confirm(t("Hapus semua coretan untuk semua orang?")) && clearBoard(room)}>
+              {t("Bersihkan")}
             </button>
             <button className="secondary" onClick={close}>
-              Tutup
+              {t("Tutup")}
             </button>
           </div>
         </div>

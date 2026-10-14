@@ -403,3 +403,65 @@ select { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 8px; b
 
 /* wadah kantor harus setinggi layar supaya kanvas 3D mengisi penuh */
 .office { position: fixed; inset: 0; }
+
+/* ---------- lantai, panggung, lift ---------- */
+.pill.stage { background: #fff0e0; color: #9a4d00; }
+.lift { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.pill.active-floor { background: var(--ink); color: #fff; }
+.door-labels { display: grid; gap: 4px; justify-items: center; }
+.desk-label.booked { background: #5b8def; color: #fff; }
+.members .actions button.on { background: #e4ecff; }
+
+/* ---------- booking ---------- */
+.card.booking { width: min(520px, 100%); gap: 12px; }
+.card.booking h2 { margin: 0; }
+.bookings { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 240px; overflow-y: auto; }
+.bookings li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #f6f1e9; }
+.bookings li.now { background: #e4ecff; box-shadow: inset 3px 0 0 #5b8def; }
+.booking-form { display: grid; gap: 8px; }
+.booking-form h4, .settings h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.booking-form input, .booking-form select, .card.settings input:not([type="checkbox"]), .ed-input, .chat-search input {
+  font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd3c4; background: #fff; color: var(--ink);
+}
+
+/* ---------- layar website ---------- */
+.web-screen { width: min(1280px, 96vw); height: min(820px, 92dvh); display: flex; flex-direction: column; background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+.web-screen-head { display: flex; gap: 8px; align-items: center; padding: 10px 12px; flex-wrap: wrap; }
+.web-screen-head input { flex: 1; min-width: 180px; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd3c4; }
+.web-screen-head a { text-decoration: none; }
+.web-screen iframe { flex: 1; border: 0; background: #fff; width: 100%; }
+.web-empty { flex: 1; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+.web-note { margin: 0; padding: 6px 12px; }
+
+/* ---------- chat: lampiran, reaksi, cari ---------- */
+.chat.drag { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 12px; }
+.chat-form { display: flex; gap: 6px; }
+.chat-form input { flex: 1; min-width: 0; }
+.attach { font-size: 18px; width: 42px; border: 0; border-radius: 10px; background: var(--card); box-shadow: var(--shadow); cursor: pointer; }
+.chat-image img { display: block; max-width: 220px; max-height: 180px; border-radius: 8px; margin-top: 6px; }
+.chat-file { display: inline-block; margin-top: 6px; color: var(--ink); text-decoration: none; background: #f1ebe1; padding: 4px 8px; border-radius: 8px; }
+.reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.react { font: inherit; font-size: 12px; border: 1px solid #e6dccd; background: #fff; border-radius: 999px; padding: 1px 7px; cursor: pointer; }
+.react.mine { background: #e4ecff; border-color: #a9c1f5; }
+.react.add { opacity: 0; transition: opacity 0.15s; }
+.chat-line:hover .react.add, .react.pick { opacity: 1; }
+.chat-search { display: grid; gap: 6px; }
+.chat-search .row-actions input { flex: 1; }
+.chat-line.result { font: inherit; text-align: left; border: 0; cursor: pointer; }
+
+/* ---------- setelan & admin ---------- */
+.card.settings { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.card.settings section { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid #eee5d8; }
+.pw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pw-grid input:first-child { grid-column: 1 / -1; }
+code.big { display: block; font-size: 22px; padding: 10px 14px; text-align: center; letter-spacing: 0.06em; user-select: all; }
+.pill.ptt { background: #f1ebe1; }
+.pill.ptt.on { background: #e5484d; color: #fff; }
+.nameplate.far { font-size: 10px; padding: 2px 7px; opacity: 0.78; }
+
+/* ---------- pilihan bahasa ---------- */
+.auth-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.auth-head h1, .auth-head h2 { margin: 0; }
+.lang-switch { display: inline-flex; background: #f1ebe1; border-radius: 8px; padding: 2px; }
+.lang-switch button { font: inherit; font-size: 12px; font-weight: 600; border: 0; background: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+.lang-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }

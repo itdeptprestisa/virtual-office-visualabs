@@ -12,9 +12,11 @@ import { useNet } from "./net";
 
 type Quality = "high" | "low";
 
-export const useGraphics = create<{ quality: Quality; fps: number; setQuality: (q: Quality) => void }>((set) => ({
+export const useGraphics = create<{ quality: Quality; fps: number; calls: number; tris: number; setQuality: (q: Quality) => void }>((set) => ({
   quality: "high",
   fps: 0,
+  calls: 0,
+  tris: 0,
   setQuality: (quality) => set({ quality }),
 }));
 
@@ -22,11 +24,16 @@ export const useGraphics = create<{ quality: Quality; fps: number; setQuality: (
 function FpsMeter() {
   const frames = useRef(0);
   const since = useRef(performance.now());
-  useFrame(() => {
+  const last = useRef({ calls: 0, tris: 0 });
+  useFrame(({ gl }) => {
+    // autoReset dimatikan di Canvas: angka di sini = total semua pass frame sebelumnya (scene, shadow, efek).
+    last.current = { calls: gl.info.render.calls, tris: gl.info.render.triangles };
+    gl.info.reset();
     frames.current++;
     const now = performance.now();
     if (now - since.current >= 500) {
-      useGraphics.setState({ fps: Math.round((frames.current * 1000) / (now - since.current)) });
+      // draw call & segitiga per frame (termasuk shadow pass) — ukuran beban render yang objektif.
+      useGraphics.setState({ fps: Math.round((frames.current * 1000) / (now - since.current)), ...last.current });
       frames.current = 0;
       since.current = now;
     }
@@ -86,10 +93,19 @@ function Effects({ high }: { high: boolean }) {
 
 export function Scene() {
   const players = useNet((s) => s.players);
+  const floor = useNet((s) => s.floor);
   const high = useGraphics((s) => s.quality) === "high";
 
   return (
-    <Canvas shadows="percentage" dpr={high ? [1, 1.5] : 1} gl={{ antialias: false }} camera={{ position: [0, 12, 20], fov: 45 }}>
+    <Canvas
+      shadows="percentage"
+      dpr={high ? [1, 1.5] : 1}
+      gl={{ antialias: false }}
+      camera={{ position: [0, 12, 20], fov: 45 }}
+      onCreated={({ gl }) => {
+        gl.info.autoReset = false;
+      }}
+    >
       {/* FPS turun terus → otomatis pindah ke mode ringan */}
       <PerformanceMonitor onDecline={() => useGraphics.getState().setQuality("low")} />
       <FpsMeter />
@@ -101,7 +117,9 @@ export function Scene() {
           <World />
           <Player />
         </Physics>
-        {Object.values(players).map((p) => (
+        {Object.values(players)
+          .filter((p) => p.floor === floor) // hanya orang di lantai yang sama
+          .map((p) => (
           <RemotePlayer key={p.id} info={p} />
         ))}
       </Suspense>
