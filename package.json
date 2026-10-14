@@ -1,0 +1,17 @@
+{
+  "name": "virtual-office",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n livekit,server,client -c yellow,magenta,cyan \"npm run dev:livekit\" \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client",
+    "dev:livekit": "livekit-server --dev --bind 0.0.0.0",
+    "test": "tsx --test shared/*.test.ts server/src/*.test.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
