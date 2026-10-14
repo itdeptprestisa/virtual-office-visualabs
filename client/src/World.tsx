@@ -236,7 +236,8 @@ function DeskOverlay({ zone, desk }: { zone: Extract<Zone, { shape: "rect" }>; d
             <meshBasicMaterial color={LOCKED_COLOR} transparent opacity={0.18} side={DoubleSide} depthWrite={false} toneMapped={false} />
           </mesh>
         ))}
-      <Html position={[cx, 1.75, cz]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+      {/* di atas monitor (sisi belakang meja), supaya tidak menumpuk dengan nama orang yang duduk */}
+      <Html position={[cx, 1.45, zone.z[0] + 0.2]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className={desk.locked ? "desk-label locked" : desk.online ? "desk-label" : "desk-label offline"}>
           {desk.locked ? "🔒 Fokus" : "🪑"} {desk.ownerName}
         </div>
