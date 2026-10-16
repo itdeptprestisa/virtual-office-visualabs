@@ -2,7 +2,8 @@
 // Denah = beberapa lantai; tiap lantai berisi ruangan (dinding kaca + pintu), area terbuka, dan furnitur.
 // Area meja, pintu, kursi & dinding diturunkan otomatis dari data ini, sehingga denah bisa diubah lewat editor.
 
-export const WORLD = { halfW: 18, halfD: 13, wallH: 3 };
+// Batas gedung (m). Tidak simetris: sisi utara (z < -13) adalah perluasan untuk town hall di Lantai 1.
+export const WORLD = { minX: -18, maxX: 18, minZ: -23, maxZ: 13, wallH: 3 };
 
 export const PROXIMITY = {
   full: 2, // volume penuh sampai jarak ini (m)
@@ -27,6 +28,8 @@ export const ITEM_TYPES = [
   "whiteboard",
   "podium",
   "elevator",
+  "arcade",
+  "gameTable",
 ] as const;
 export type ItemType = (typeof ITEM_TYPES)[number];
 
@@ -47,6 +50,8 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   whiteboard: "Whiteboard",
   podium: "Podium",
   elevator: "Lift",
+  arcade: "Mesin arcade",
+  gameTable: "Meja Empat Sejajar",
 };
 
 export type Quarter = 0 | 1 | 2 | 3; // rotasi kelipatan 90°
@@ -203,7 +208,9 @@ export function deriveFloor(floor: Floor): Derived {
   // Dinding kaca ruangan: 4 sisi minus celah pintu; sisi yang menempel dinding luar dilewati.
   const walls: WallSegment[] = [];
   const onOuter = (orient: "x" | "z", c: number) =>
-    orient === "x" ? Math.abs(Math.abs(c) - WORLD.halfD) < 0.35 : Math.abs(Math.abs(c) - WORLD.halfW) < 0.35;
+    orient === "x"
+      ? Math.min(Math.abs(c - WORLD.minZ), Math.abs(c - WORLD.maxZ)) < 0.35
+      : Math.min(Math.abs(c - WORLD.minX), Math.abs(c - WORLD.maxX)) < 0.35;
   for (const r of floor.rooms) {
     const sides: [Side, "x" | "z", [number, number], number][] = [
       ["n", "x", r.x, r.z[0]],
@@ -302,6 +309,9 @@ function floor1(): Floor {
   items.push(it("chair", -13, 6.7, 0), it("chair", -13, 8.5, 2), it("plant", -17, 4.2));
   // Lift ke lantai lain (pojok tenggara, menghadap utara)
   items.push(it("elevator", 16.9, 11.9, 2));
+  // Town hall (sisi utara gedung): panggung + podium + layar, kursi penonton menghadap panggung (utara)
+  items.push(it("podium", 0, -20.6, 0), it("screen", 0, -22.75), it("plant", -5.3, -22.2), it("plant", 5.3, -22.2));
+  for (const z of [-17.4, -16.0, -14.6]) for (let x = -9.1; x <= 9.11; x += 1.3) items.push(it("chair", Math.round(x * 100) / 100, z, 2));
   return {
     id: "f1",
     name: "Lantai 1",
@@ -313,6 +323,7 @@ function floor1(): Floor {
     areas: [
       { id: "lounge", name: "Lounge", color: "#e8707f", shape: "circle", cx: 12, cz: 7.5, r: 4.3 },
       { id: "pantry", name: "Pantry", color: "#4fae7d", shape: "rect", x: [-17.6, -9.5], z: [3.4, 12.7] },
+      { id: "townhall", name: "Town Hall", color: "#f2994a", shape: "rect", x: [-4.5, 4.5], z: [-22.85, -19.3], stage: true },
     ],
     items,
   };
@@ -320,28 +331,11 @@ function floor1(): Floor {
 
 function floor2(): Floor {
   const items: Item[] = [];
-  // Aula: panggung + podium + layar, kursi penonton menghadap panggung (utara)
-  items.push(it("podium", -9.75, -10.6, 0), it("screen", -9.75, -12.75), it("plant", -13.6, -12), it("plant", -5.9, -12));
-  for (const z of [-7.4, -6.0, -4.6, -3.2]) for (let x = -15.6; x <= -3.9; x += 1.3) items.push(it("chair", Math.round(x * 100) / 100, z, 2));
-  // Ruang Kolaborasi
-  items.push(it("tableLarge", 10.9, -8.4), it("screen", 10.9, -12.75), it("whiteboard", 17.55, -8.4, 3));
-  for (const dx of [-2.2, -0.7, 0.8, 2.3]) items.push(it("chair", 10.9 + dx, -10, 0), it("chair", 10.9 + dx, -6.8, 2));
-  // Hot desk
-  for (const col of [-14.5, -12.5, -8.5, -6.5]) items.push(it("desk", col, 4.5));
-  // Taman atap
-  items.push(it("rug", 10.5, 7.5), it("sofa", 10.5, 4.6, 0), it("sofa", 10.5, 10.4, 2), it("coffeeTable", 10.5, 7.5));
-  for (const [x, z] of [[6.5, 4], [6.5, 11], [14.5, 4], [14.5, 11], [16.8, 2.2]]) items.push(it("plant", x, z));
+  // Arcade: mesin arcade di dinding utara, meja Empat Sejajar (2 pemain) dengan kursi berhadapan
+  for (const x of [-4.5, -1.5, 1.5, 4.5]) items.push(it("arcade", x, -22.3, 0));
+  for (const [x, z] of [[-8, -12], [8, -12], [-8, -2], [8, -2]]) items.push(it("gameTable", x, z), it("chair", x, z - 1.1, 0), it("chair", x, z + 1.1, 2));
   items.push(it("elevator", 16.9, 11.9, 2));
-  return {
-    id: "f2",
-    name: "Lantai 2",
-    rooms: [{ id: "kolaborasi", name: "Ruang Kolaborasi", x: [4, 17.85], z: [-12.85, -4], door: { side: "s", center: 10.9, width: 2.75 }, color: "#3fa7a0" }],
-    areas: [
-      { id: "panggung", name: "Panggung Aula", color: "#f2994a", shape: "rect", x: [-13.6, -5.9], z: [-12.85, -9.3], stage: true },
-      { id: "taman", name: "Taman Atap", color: "#4fae7d", shape: "circle", cx: 10.5, cz: 7.5, r: 4.2 },
-    ],
-    items,
-  };
+  return { id: "f2", name: "Lantai 2", rooms: [], areas: [], items };
 }
 
 export function defaultLayout(): Layout {
@@ -356,10 +350,10 @@ const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.
 const HEX = /^#[0-9a-f]{6}$/i;
 const ID = /^[a-z0-9_-]{1,40}$/i;
 
-function span(v: unknown, lim: number): [number, number] | null {
+function span(v: unknown, lo: number, hi: number): [number, number] | null {
   if (!Array.isArray(v) || v.length !== 2) return null;
-  const a = num(v[0], -lim, lim);
-  const b = num(v[1], -lim, lim);
+  const a = num(v[0], lo, hi);
+  const b = num(v[1], lo, hi);
   if (a === null || b === null || b - a < 1) return null;
   return [a, b];
 }
@@ -375,10 +369,10 @@ function sanitizeFloor(src: Record<string, unknown>, uniq: (id: unknown) => stri
   for (const r of src.rooms as Record<string, any>[]) {
     const rid = uniq(r?.id);
     const rname = str(r?.name, 40);
-    const x = span(r?.x, WORLD.halfW);
-    const z = span(r?.z, WORLD.halfD);
+    const x = span(r?.x, WORLD.minX, WORLD.maxX);
+    const z = span(r?.z, WORLD.minZ, WORLD.maxZ);
     const side = ["n", "s", "e", "w"].includes(r?.door?.side) ? (r.door.side as Side) : null;
-    const center = num(r?.door?.center, -WORLD.halfW, WORLD.halfW);
+    const center = num(r?.door?.center, Math.min(WORLD.minX, WORLD.minZ), Math.max(WORLD.maxX, WORLD.maxZ));
     const width = num(r?.door?.width, 0.9, 4);
     if (!rid || !rname || !x || !z || !side || center === null || width === null) return null;
     rooms.push({ id: rid, name: rname, x, z, door: { side, center, width }, color: HEX.test(r?.color) ? r.color : "#5b8def" });
@@ -391,14 +385,14 @@ function sanitizeFloor(src: Record<string, unknown>, uniq: (id: unknown) => stri
     const stage = a?.stage === true ? { stage: true } : {};
     if (!aid || !aname) return null;
     if (a.shape === "circle") {
-      const cx = num(a.cx, -WORLD.halfW, WORLD.halfW);
-      const cz = num(a.cz, -WORLD.halfD, WORLD.halfD);
+      const cx = num(a.cx, WORLD.minX, WORLD.maxX);
+      const cz = num(a.cz, WORLD.minZ, WORLD.maxZ);
       const r = num(a.r, 0.5, 15);
       if (cx === null || cz === null || r === null) return null;
       areas.push({ id: aid, name: aname, color, ...stage, shape: "circle", cx, cz, r });
     } else {
-      const x = span(a.x, WORLD.halfW);
-      const z = span(a.z, WORLD.halfD);
+      const x = span(a.x, WORLD.minX, WORLD.maxX);
+      const z = span(a.z, WORLD.minZ, WORLD.maxZ);
       if (!x || !z) return null;
       areas.push({ id: aid, name: aname, color, ...stage, shape: "rect", x, z });
     }
@@ -407,8 +401,8 @@ function sanitizeFloor(src: Record<string, unknown>, uniq: (id: unknown) => stri
   for (const i of src.items as Record<string, any>[]) {
     const iid = uniq(i?.id);
     const type = (ITEM_TYPES as readonly string[]).includes(i?.type) ? (i.type as ItemType) : null;
-    const x = num(i?.x, -WORLD.halfW, WORLD.halfW);
-    const z = num(i?.z, -WORLD.halfD, WORLD.halfD);
+    const x = num(i?.x, WORLD.minX, WORLD.maxX);
+    const z = num(i?.z, WORLD.minZ, WORLD.maxZ);
     const rot = [0, 1, 2, 3].includes(i?.rot) ? (i.rot as Quarter) : null;
     if (!iid || !type || x === null || z === null || rot === null) return null;
     items.push({ id: iid, type, x, z, rot });

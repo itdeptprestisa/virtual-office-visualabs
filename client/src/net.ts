@@ -150,6 +150,7 @@ interface NetState {
   nearDoor: string | null;
   nearSeat: string | null;
   nearLift: boolean;
+  nearGame: { id: string; type: "arcade" | "gameTable" } | null; // mesin arcade / meja game terdekat
   sitting: boolean;
   notice: { text: string; ts: number } | null;
   summon: { from: string; name: string; place: string | null; floor: string; floorName: string; p: Vec3; ts: number } | null;
@@ -193,6 +194,7 @@ export const useNet = create<NetState>(() => ({
   nearDoor: null,
   nearSeat: null,
   nearLift: false,
+  nearGame: null,
   sitting: false,
   notice: null,
   summon: null,
@@ -246,7 +248,7 @@ export function setFloorLocal(floor: string) {
   const d = useNet.getState().derivedAll[floor];
   if (!d) return;
   setDerived(d);
-  useNet.setState({ floor, derived: d, nearDoor: null, nearSeat: null });
+  useNet.setState({ floor, derived: d, nearDoor: null, nearSeat: null, nearGame: null });
 }
 
 /** Naik lift / pindah lantai: lokal dulu, lalu server. `p` = posisi tiba. */
@@ -260,7 +262,11 @@ export { sameFloor };
 
 // ---------- koneksi, login & sambung ulang ----------
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? `ws://${location.hostname}:2567`;
+// Dev: Vite (5173) & server (2567) terpisah. Build produksi: server menyajikan web-nya sendiri → domain & port yang sama,
+// wss:// otomatis bila halaman dibuka lewat https.
+const SERVER_URL =
+  import.meta.env.VITE_SERVER_URL ??
+  (import.meta.env.DEV ? `ws://${location.hostname}:2567` : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 const TOKEN_KEY = "vo-token";
 let ws: WebSocket | null = null;
 let retry = 0;
@@ -558,6 +564,10 @@ function handle(msg: any) {
     case "wb_clear":
       import("./whiteboard").then((w) => w.onWhiteboardMessage(msg));
       break;
+    case "arcade_scores":
+    case "c4_state":
+      import("./games").then((g) => g.onGameMessage(msg));
+      break;
     case "media":
       useNet.setState({ media: { url: msg.url, token: msg.token } });
       break;
@@ -684,6 +694,7 @@ export const sendSummon = (to: string) => send({ t: "summon", to });
 export const sendHand = (up: boolean) => send({ t: "hand", up });
 export const sendMuteRoom = () => send({ t: "mute_room" });
 export const sendWhiteboard = (msg: Record<string, unknown>) => send(msg);
+export const sendGame = (msg: Record<string, unknown>) => send(msg);
 export const sendLayout = (layout: Layout) => send({ t: "layout", layout });
 export const resetLayout = () => send({ t: "layout", reset: true });
 export const sendAdmin = (msg: Record<string, unknown>) => send({ t: "admin", ...msg });

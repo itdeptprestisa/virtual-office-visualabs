@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { Layout } from "../../shared/layout.js";
 import type { Avatar } from "./avatar.js";
@@ -52,6 +52,13 @@ export interface Booking {
   byName: string;
 }
 
+export interface ScoreEntry {
+  userId: string;
+  name: string;
+  score: number;
+  ts: number;
+}
+
 export interface Stroke {
   id: string;
   color: string;
@@ -72,6 +79,7 @@ interface Data {
   bookings: Booking[];
   guestLinks: Record<string, { label: string; exp: number; createdBy: string }>;
   screens: Record<string, string>; // id item layar → URL website yang ditampilkan
+  scores: Record<string, ScoreEntry[]>; // id game arcade → skor terbaik (satu entri per orang)
 }
 
 const FILE = resolve(process.env.DATA_FILE ?? "data/db.json");
@@ -94,6 +102,7 @@ function empty(): Data {
     bookings: [],
     guestLinks: {},
     screens: {},
+    scores: {},
   };
 }
 
@@ -132,6 +141,37 @@ export function backup() {
   copyFileSync(FILE, resolve(BACKUP_DIR, `db-${stamp}.json`));
   const old = readdirSync(BACKUP_DIR).filter((f) => f.startsWith("db-")).sort().slice(0, -BACKUP_KEEP);
   for (const f of old) rmSync(resolve(BACKUP_DIR, f));
+}
+
+const UPLOAD_GRACE_MS = 24 * 3600_000;
+
+/**
+ * Hapus lampiran yang tidak lagi dirujuk pesan tersimpan (chat Everyone & DM), misalnya karena pesannya tergeser
+ * batas riwayat. File baru (< 24 jam) tidak disentuh: lampiran chat Area tidak pernah tersimpan sebagai pesan tapi
+ * masih tampil di layar orang, dan file yang baru di-upload mungkin belum terkirim. File di disk tanpa catatan
+ * (sisa proses yang mati sebelum menyimpan) ikut dibersihkan dengan aturan umur yang sama. Mengembalikan jumlah file.
+ */
+export function sweepUploads(now = Date.now(), graceMs = UPLOAD_GRACE_MS) {
+  const used = new Set<string>();
+  for (const list of [db.umum, ...Object.values(db.dms)]) for (const m of list) if (m.file) used.add(m.file.id);
+  let removed = 0;
+  for (const [id, f] of Object.entries(db.files)) {
+    if (used.has(id) || now - f.ts < graceMs) continue;
+    rmSync(resolve(UPLOAD_DIR, id), { force: true });
+    delete db.files[id];
+    removed++;
+  }
+  if (existsSync(UPLOAD_DIR)) {
+    for (const name of readdirSync(UPLOAD_DIR)) {
+      if (db.files[name]) continue;
+      const path = resolve(UPLOAD_DIR, name);
+      if (now - statSync(path).mtimeMs < graceMs) continue;
+      rmSync(path, { force: true });
+      removed++;
+    }
+  }
+  if (removed) save();
+  return removed;
 }
 
 export const dmKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);

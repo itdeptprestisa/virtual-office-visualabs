@@ -12,7 +12,11 @@ import { locale, t, useT } from "./i18n";
 
 // Kantor digambar dari data denah (useNet.layout); bentuk turunan (area, pintu, dinding) dari useNet.derived.
 
-const { halfW: W, halfD: D, wallH: WALL_H } = WORLD;
+const { minX, maxX, minZ, maxZ, wallH: WALL_H } = WORLD;
+const W = (maxX - minX) / 2; // setengah lebar & kedalaman gedung
+const D = (maxZ - minZ) / 2;
+const CX = (minX + maxX) / 2; // titik tengah gedung (tidak di 0,0: gedung diperluas ke utara)
+const CZ = (minZ + maxZ) / 2;
 const FLOOR = "#ead8bf";
 const WALL = "#f6f1ea";
 const WALL_TRIM = "#d9cbb6";
@@ -36,19 +40,19 @@ function Shell() {
   return (
     <>
       <RigidBody type="fixed" colliders={false}>
-        <CuboidCollider args={[W, 0.1, D]} position={[0, -0.1, 0]} />
+        <CuboidCollider args={[W, 0.1, D]} position={[CX, -0.1, CZ]} />
       </RigidBody>
-      <mesh rotation-x={-Math.PI / 2} receiveShadow>
+      <mesh rotation-x={-Math.PI / 2} position={[CX, 0, CZ]} receiveShadow>
         <planeGeometry args={[W * 2, D * 2]} />
         <meshStandardMaterial color={FLOOR} roughness={0.9} />
       </mesh>
       {/* utara & samping tinggi (menghalangi kamera), selatan rendah */}
-      <Block size={[W * 2, WALL_H, 0.3]} position={[0, WALL_H / 2, -D]} color={WALL} blocksCamera />
-      <Block size={[0.3, WALL_H, D * 2]} position={[-W, WALL_H / 2, 0]} color={WALL} blocksCamera />
-      <Block size={[0.3, WALL_H, D * 2]} position={[W, WALL_H / 2, 0]} color={WALL} blocksCamera />
-      <Block size={[W * 2, 0.6, 0.3]} position={[0, 0.3, D]} color={WALL_TRIM} />
+      <Block size={[W * 2, WALL_H, 0.3]} position={[CX, WALL_H / 2, minZ]} color={WALL} blocksCamera />
+      <Block size={[0.3, WALL_H, D * 2]} position={[minX, WALL_H / 2, CZ]} color={WALL} blocksCamera />
+      <Block size={[0.3, WALL_H, D * 2]} position={[maxX, WALL_H / 2, CZ]} color={WALL} blocksCamera />
+      <Block size={[W * 2, 0.6, 0.3]} position={[CX, 0.3, maxZ]} color={WALL_TRIM} />
       {[-12, -6].map((x) => (
-        <mesh key={x} position={[x, 1.8, -D + 0.16]}>
+        <mesh key={x} position={[x, 1.8, minZ + 0.16]}>
           <planeGeometry args={[3.2, 1.4]} />
           <meshStandardMaterial color="#cfe8ff" emissive="#cfe8ff" emissiveIntensity={0.6} />
         </mesh>

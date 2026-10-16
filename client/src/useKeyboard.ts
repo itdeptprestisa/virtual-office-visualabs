@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { gameInput } from "./input";
 
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -11,7 +12,7 @@ export function useKeyboard() {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (isTyping(e.target)) return;
+      if (isTyping(e.target) || gameInput.active) return;
       held.current.add(e.code);
       if (!e.repeat) pressed.current.add(e.code);
     };

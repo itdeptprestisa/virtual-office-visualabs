@@ -4,9 +4,11 @@ import { resolve } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { AccessToken } from "livekit-server-sdk";
 import { sanitizeAvatar } from "./avatar.js";
-import { UPLOAD_DIR, backup, db, dmKey, flush, pushCapped, save, type ChatMsg, type FileRef, type Stroke, type User } from "./store.js";
+import { UPLOAD_DIR, backup, db, dmKey, flush, pushCapped, save, sweepUploads, type ChatMsg, type FileRef, type Stroke, type User } from "./store.js";
 import { SESSION_DAYS, USERNAME_RE, hashPassword, newId, newToken, verifyPassword } from "./auth.js";
 import { busyAt, fetchCalendar, type CalEvent } from "./calendar.js";
+import { Limiter, tooMany } from "./ratelimit.js";
+import { staticHandler } from "./static.js";
 import {
   PROXIMITY,
   defaultLayout,
@@ -14,9 +16,11 @@ import {
   sanitizeLayout,
   zoneIn,
   type Derived,
+  type ItemType,
   type Layout,
   type Zone,
 } from "../../shared/layout.js";
+import { C4_COLS, c4Drop, c4Empty, c4Line, c4Result, type C4Piece, type C4Result } from "../../shared/connect4.js";
 
 try {
   process.loadEnvFile();
@@ -70,9 +74,35 @@ const REACTIONS = new Set(["👍", "❤️", "😂", "🎉", "👀", "🙏"]);
 // Default = `livekit-server --dev` lokal. Untuk LiveKit Cloud isi .env (lihat .env.example).
 // Tanpa LIVEKIT_URL, client memakai host halaman (port 7880) supaya tetap jalan dari perangkat lain di LAN.
 const LIVEKIT_URL = process.env.LIVEKIT_URL || null;
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY ?? "devkey";
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET ?? "secret";
+const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || "devkey";
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || "secret";
 const LIVEKIT_ROOM = process.env.LIVEKIT_ROOM ?? "office";
+
+// Produksi (NODE_ENV=production, mis. di Docker) wajib pakai LiveKit & kunci sendiri — kunci dev itu publik.
+if (process.env.NODE_ENV === "production") {
+  const missing = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"].filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.error(`Mode produksi butuh ${missing.join(", ")} (lihat .env.example).`);
+    process.exit(1);
+  }
+  if (LIVEKIT_API_SECRET.length < 32) {
+    console.error("LIVEKIT_API_SECRET minimal 32 karakter.");
+    process.exit(1);
+  }
+}
+
+// Di belakang reverse proxy (Traefik Dokploy) IP asli ada di X-Forwarded-For; tanpa TRUST_PROXY header itu diabaikan.
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+const clientIp = (req: IncomingMessage) =>
+  (TRUST_PROXY && String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim()) || req.socket.remoteAddress || "?";
+
+// Batas percobaan. Penahan utama tebak-tebakan password = gagal per username; batas per IP dibuat longgar
+// karena satu kantor bisa keluar lewat satu IP (Wi-Fi/NAT yang sama).
+const loginFailUser = new Limiter(5, 15 * 60_000);
+const loginFailIp = new Limiter(50, 15 * 60_000);
+const registerIp = new Limiter(30, 60 * 60_000);
+const guestIp = new Limiter(60, 60 * 60_000);
+setInterval(() => [loginFailUser, loginFailIp, registerIp, guestIp].forEach((l) => l.prune()), 10 * 60_000).unref();
 
 async function mediaToken(id: string, name: string) {
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity: id, name, ttl: "8h" });
@@ -90,6 +120,18 @@ try {
 } catch (err) {
   console.warn("Backup gagal:", err);
 }
+
+// Lampiran yang pesannya sudah tergeser batas riwayat dihapus dari disk (saat start & tiap jam).
+function cleanUploads() {
+  try {
+    const n = sweepUploads();
+    if (n) console.log(`Lampiran tak terpakai dihapus: ${n} file`);
+  } catch (err) {
+    console.warn("Pembersihan lampiran gagal:", err);
+  }
+}
+cleanUploads();
+setInterval(cleanUploads, 3600_000).unref();
 
 // ---------- denah & state dunia ----------
 
@@ -258,6 +300,60 @@ function setZone(pl: Player) {
   }
 }
 
+// ---------- game arcade (Lantai 2) ----------
+
+const ARCADE_GAMES = new Set(["snake"]);
+const SCORE_MAX = 10_000;
+const SCORE_TOP = 10;
+const GAME_REACH = 3.5; // m — harus berdiri dekat mesin/meja untuk main
+
+/** Item game dengan id & jenis itu di lantai pemain, dalam jangkauan. */
+function gameItemNear(pl: Player, id: unknown, type: ItemType) {
+  const it = layout.floors.find((f) => f.id === pl.floor)?.items.find((i) => i.id === id && i.type === type);
+  return it && Math.hypot(it.x - pl.p[0], it.z - pl.p[2]) <= GAME_REACH ? it : undefined;
+}
+
+// Empat Sejajar: state per meja hanya di memori (permainan singkat, tidak perlu disimpan).
+interface C4Game {
+  floor: string;
+  board: number[];
+  seats: [Player | null, Player | null]; // [merah, kuning]
+  turn: C4Piece;
+  result: C4Result;
+  last: number | null; // sel keping terakhir
+}
+const c4Games = new Map<string, C4Game>();
+
+const c4View = (table: string, g?: C4Game) => ({
+  t: "c4_state",
+  table,
+  board: g?.board ?? c4Empty(),
+  seats: (g?.seats ?? [null, null]).map((p) => (p ? { id: p.id, name: p.user.name } : null)),
+  turn: g?.turn ?? 1,
+  result: g?.result ?? 0,
+  line: g ? c4Line(g.board) : null,
+  last: g?.last ?? null,
+});
+const c4Push = (table: string, g: C4Game) => sendTo((pl) => pl.floor === g.floor, c4View(table, g));
+
+function c4Reset(g: C4Game) {
+  g.board = c4Empty();
+  g.turn = 1;
+  g.result = 0;
+  g.last = null;
+}
+
+/** Lepas pemain dari meja mana pun (keluar, pindah lantai, pindah meja); permainan yang ditinggal diulang. */
+function c4LeaveAll(pl: Player) {
+  for (const [table, g] of c4Games) {
+    const i = g.seats.indexOf(pl);
+    if (i < 0) continue;
+    g.seats[i] = null;
+    c4Reset(g);
+    c4Push(table, g);
+  }
+}
+
 // ---------- HTTP: lampiran ----------
 
 function serveFile(req: IncomingMessage, res: ServerResponse) {
@@ -281,9 +377,13 @@ function serveFile(req: IncomingMessage, res: ServerResponse) {
   createReadStream(path).pipe(res);
 }
 
+// Hasil build client; default ../client/dist relatif ke folder server. Tidak ada (mode dev) → hanya API.
+const serveStatic = staticHandler(process.env.STATIC_DIR ?? "../client/dist");
+
 const http = createServer((req, res) => {
   if (req.url?.startsWith("/files/")) return serveFile(req, res);
   if (req.url === "/health") return void res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
+  if (serveStatic) return serveStatic(req, res);
   res.writeHead(404).end();
 });
 
@@ -292,7 +392,8 @@ const http = createServer((req, res) => {
 // Batas pesan > batas upload (base64 ±1,37×) supaya file kebesaran ditolak dengan pesan, bukan memutus koneksi.
 const wss = new WebSocketServer({ server: http, maxPayload: 12 * 1024 * 1024 });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
   let authed: User | null = null;
   let token = "";
   let me: Player | null = null;
@@ -323,12 +424,23 @@ wss.on("connection", (ws) => {
         return authOk(u, msg.token);
       }
       if (msg?.t === "login") {
-        const u = db.users.find((x) => x.username === text(msg.username, 40).toLowerCase());
-        if (!u || u.role === "guest" || !verifyPassword(String(msg.password ?? ""), u.salt, u.passHash)) return authError("Username atau password salah.");
+        const username = text(msg.username, 40).toLowerCase();
+        const wait = Math.max(loginFailUser.blocked(username), loginFailIp.blocked(ip));
+        if (wait) return authError(tooMany(wait));
+        const u = db.users.find((x) => x.username === username);
+        if (!u || u.role === "guest" || !verifyPassword(String(msg.password ?? ""), u.salt, u.passHash)) {
+          loginFailUser.hit(username);
+          loginFailIp.hit(ip);
+          return authError("Username atau password salah.");
+        }
         if (u.disabled) return authError("Akun ini dinonaktifkan admin.");
+        loginFailUser.reset(username);
         return authOk(u, createSession(u.id));
       }
       if (msg?.t === "guest") {
+        const wait = guestIp.blocked(ip);
+        if (wait) return authError(tooMany(wait));
+        guestIp.hit(ip);
         const link = db.guestLinks[String(msg.token)];
         const name = text(msg.name, 24);
         if (!link || link.exp < Date.now()) return authError("Link tamu sudah tidak berlaku.");
@@ -353,6 +465,9 @@ wss.on("connection", (ws) => {
         return authOk(u, createSession(u.id, link.exp));
       }
       if (msg?.t === "register") {
+        const wait = registerIp.blocked(ip);
+        if (wait) return authError(tooMany(wait));
+        registerIp.hit(ip);
         const username = text(msg.username, 40).toLowerCase();
         const password = String(msg.password ?? "");
         const name = text(msg.name, 24);
@@ -458,6 +573,7 @@ function dropPlayer(pl: Player) {
   pl.user.lastFloor = pl.floor;
   const myDesk = deskOf(pl.id);
   if (myDesk) lockedDesks.delete(myDesk); // mode fokus berakhir saat pemilik keluar
+  c4LeaveAll(pl);
   save();
   broadcast({ t: "leave", id: pl.id });
   broadcast(worldView());
@@ -485,6 +601,7 @@ function handle(me: Player, msg: any) {
       const target = derived[String(msg.floor)];
       if (!target || msg.floor === me.floor) return;
       const lift = target.elevators[0];
+      c4LeaveAll(me);
       me.floor = target.floorId;
       me.p = validVec3(msg.p) ?? (lift ? [lift.exit[0], 0, lift.exit[1]] : randomSpawn());
       me.zone = null;
@@ -756,6 +873,72 @@ function handle(me: Player, msg: any) {
       sendTo((pl) => insideRoom(msg.room, pl), { t: "wb_clear", room: msg.room });
       return;
     }
+    // ----- game arcade -----
+    case "arcade_scores": {
+      const game = String(msg.game);
+      if (ARCADE_GAMES.has(game)) send(me.ws, { t: "arcade_scores", game, top: db.scores[game] ?? [] });
+      return;
+    }
+    case "arcade_score": {
+      const game = String(msg.game);
+      const score = msg.score;
+      if (!ARCADE_GAMES.has(game) || !Number.isInteger(score) || score <= 0 || score > SCORE_MAX) return;
+      if (!gameItemNear(me, msg.machine, "arcade")) return;
+      const list = (db.scores[game] ??= []);
+      const mine = list.find((e) => e.userId === me.id);
+      if (mine && mine.score >= score) return;
+      if (mine) Object.assign(mine, { score, name: me.user.name, ts: Date.now() });
+      else list.push({ userId: me.id, name: me.user.name, score, ts: Date.now() });
+      list.sort((a, b) => b.score - a.score || a.ts - b.ts);
+      list.splice(SCORE_TOP);
+      save();
+      sendTo((pl) => pl.floor === me.floor, { t: "arcade_scores", game, top: list });
+      return;
+    }
+    case "c4_open": {
+      if (!gameItemNear(me, msg.table, "gameTable")) return;
+      send(me.ws, c4View(String(msg.table), c4Games.get(String(msg.table))));
+      return;
+    }
+    case "c4_join": {
+      if (!gameItemNear(me, msg.table, "gameTable")) return;
+      const table = String(msg.table);
+      let g = c4Games.get(table);
+      if (g?.seats.includes(me)) return;
+      const seat = msg.seat === 0 || msg.seat === 1 ? (g?.seats[msg.seat] ? -1 : msg.seat) : g ? g.seats.indexOf(null) : 0;
+      if (seat < 0) return send(me.ws, { t: "notice", text: "Kursi itu sudah terisi." });
+      c4LeaveAll(me); // satu orang satu meja
+      if (!g) c4Games.set(table, (g = { floor: me.floor, board: c4Empty(), seats: [null, null], turn: 1, result: 0, last: null }));
+      g.seats[seat] = me;
+      c4Reset(g);
+      c4Push(table, g);
+      return;
+    }
+    case "c4_leave": {
+      c4LeaveAll(me);
+      return;
+    }
+    case "c4_drop": {
+      const table = String(msg.table);
+      const g = c4Games.get(table);
+      if (!g || g.result || !g.seats[0] || !g.seats[1] || g.seats[g.turn - 1] !== me) return;
+      if (!gameItemNear(me, table, "gameTable")) return;
+      const row = c4Drop(g.board, msg.col, g.turn);
+      if (row < 0) return;
+      g.last = row * C4_COLS + msg.col;
+      g.result = c4Result(g.board);
+      if (!g.result) g.turn = g.turn === 1 ? 2 : 1;
+      c4Push(table, g);
+      return;
+    }
+    case "c4_reset": {
+      const table = String(msg.table);
+      const g = c4Games.get(table);
+      if (!g || !g.seats.includes(me)) return;
+      c4Reset(g);
+      c4Push(table, g);
+      return;
+    }
     // ----- admin -----
     case "layout": {
       if (me.user.role !== "admin") return;
@@ -957,4 +1140,4 @@ setInterval(() => {
 }, 6 * 3600_000);
 
 process.on("exit", flush);
-http.listen(PORT, () => console.log(`Virtual office server jalan di ws://localhost:${PORT}`));
+http.listen(PORT, () => console.log(`Virtual office server jalan di ws://localhost:${PORT}${serveStatic ? " (+ web di http://localhost:" + PORT + ")" : ""}`));

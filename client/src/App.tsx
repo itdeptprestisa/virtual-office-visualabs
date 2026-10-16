@@ -8,6 +8,7 @@ import { WhiteboardModal } from "./WhiteboardView";
 import { requestBoard } from "./whiteboard";
 import { AuthScreen, FirstAvatarScreen, GuestScreen, KickedScreen } from "./ui/AuthScreen";
 import { BookingModal } from "./ui/BookingModal";
+import { GameModal } from "./ui/GameModal";
 import { TempPasswordModal } from "./ui/AdminPanel";
 import { ChatPanel } from "./ui/ChatPanel";
 import { MemberPanel, SummonPrompt } from "./ui/MemberPanel";
@@ -56,7 +57,7 @@ function useMediaConnection() {
   const media = useNet((s) => s.media);
   const phase = useNet((s) => s.phase);
   useEffect(() => {
-    if (media) connectMedia(media.url ?? `ws://${location.hostname}:7880`, media.token);
+    if (media) connectMedia(media.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:7880`, media.token);
   }, [media]);
   useEffect(() => {
     if (phase === "kicked") room.disconnect();
@@ -135,6 +136,7 @@ function Office() {
       <EditorPanel />
       <WhiteboardModal />
       <BookingModal />
+      <GameModal />
       <ScreenModal />
       <TempPasswordModal />
       {panel === "members" && <MemberPanel onClose={() => setPanel(null)} />}

@@ -41,6 +41,7 @@ const PATTERNS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^Lantai (\d+)$/, (m) => `Floor ${m[1]}`],
   [/^Ruang (\d+)$/, (m) => `Room ${m[1]}`],
   [/^Area (\d+)$/, (m) => `Area ${m[1]}`],
+  [/^Terlalu banyak percobaan\. Coba lagi dalam (\d+) menit\.$/, (m) => `Too many attempts. Try again in ${m[1]} min.`],
 ];
 
 /** Terjemahkan teks (bahasa aktif saat dipanggil). */

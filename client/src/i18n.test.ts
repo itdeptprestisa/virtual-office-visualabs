@@ -36,7 +36,7 @@ const dynamicKeys = [
   ...["Diam", "Jalan", "Lambai", "Joget"], // animasi pratinjau
   ...["Buka", "Tutup", "Ketuk", "Kunci", "Buka kunci"], // aksi pintu
   ...["Tidak bisa terhubung ke server.", "Kantor sedang penuh, coba lagi nanti.", "Upload kelamaan, coba lagi.", "File tidak bisa dibaca."],
-  ...["Ruang Meeting", "Ruang Fokus A", "Ruang Fokus B", "Ruang Kolaborasi", "Lounge", "Pantry", "Panggung Aula", "Taman Atap", "Sekitar"],
+  ...["Ruang Meeting", "Ruang Fokus A", "Ruang Fokus B", "Lounge", "Pantry", "Town Hall", "Sekitar"],
 ];
 
 test("semua teks UI di kode client punya terjemahan Inggris", () => {

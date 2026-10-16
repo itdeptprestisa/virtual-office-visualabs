@@ -46,12 +46,15 @@ export const COLLIDERS: Partial<Record<ItemType, { half: V3; pos: V3 }>> = {
   bookshelf: { half: [1, 1, 0.2], pos: [0, 1, 0] },
   podium: { half: [0.32, 0.55, 0.25], pos: [0, 0.55, 0] },
   elevator: { half: [1, 1.4, 0.3], pos: [0, 1.4, -0.1] },
+  arcade: { half: [0.45, 0.95, 0.4], pos: [0, 0.95, 0] },
+  gameTable: { half: [0.6, 0.38, 0.45], pos: [0, 0.38, 0] },
 };
 
 /** Radius kira-kira (untuk lingkaran sorotan di editor). */
 export const FOOTPRINT: Record<ItemType, number> = {
   desk: 1.1, chair: 0.45, sofa: 1.3, tableLarge: 3.2, tableSmall: 1, coffeeTable: 1, rug: 4, plant: 0.5,
   reception: 1.9, counter: 1.6, fridge: 0.6, bookshelf: 1.1, screen: 2.5, whiteboard: 1.4, podium: 0.5, elevator: 1.1,
+  arcade: 0.7, gameTable: 0.8,
 };
 
 function Desk() {
@@ -237,6 +240,52 @@ function Elevator() {
   );
 }
 
+/** Mesin arcade (menghadap +z): badan, layar menyala, panel tombol & joystick. */
+function Arcade() {
+  return (
+    <>
+      <Box size={[0.9, 1.9, 0.8]} pos={[0, 0.95, -0.05]} color="#3b2a63" rough={0.5} />
+      <Box size={[0.94, 0.28, 0.84]} pos={[0, 2.0, -0.05]} color="#2a1d47" rough={0.5} />
+      <mesh position={[0, 2.0, 0.375]}>
+        <planeGeometry args={[0.8, 0.2]} />
+        <meshStandardMaterial color="#ff5fa2" emissive="#ff5fa2" emissiveIntensity={0.8} />
+      </mesh>
+      <mesh position={[0, 1.5, 0.356]}>
+        <planeGeometry args={[0.7, 0.55]} />
+        <meshStandardMaterial color="#0b1a0f" emissive="#3dd36b" emissiveIntensity={0.45} />
+      </mesh>
+      <Box size={[0.9, 0.08, 0.36]} pos={[0, 1.05, 0.5]} color="#2a1d47" />
+      <mesh position={[-0.2, 1.14, 0.52]}>
+        <cylinderGeometry args={[0.025, 0.025, 0.12, 12]} />
+        <meshStandardMaterial color="#e33" />
+      </mesh>
+      {[0.08, 0.22].map((x) => (
+        <mesh key={x} position={[x, 1.1, 0.52]}>
+          <cylinderGeometry args={[0.04, 0.04, 0.03, 16]} />
+          <meshStandardMaterial color={x < 0.15 ? "#ffd23f" : "#3fa7ff"} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+/** Meja Empat Sejajar: meja kecil dengan papan biru berdiri di tengah (dilihat dari kedua sisi). */
+function GameTable() {
+  return (
+    <>
+      <Table w={1.2} d={0.9} />
+      <Box size={[0.84, 0.62, 0.05]} pos={[0, 1.09, 0]} color="#2c5fd6" rough={0.4} />
+      {/* beberapa keping hiasan (state permainan sungguhan tampil di jendela game) */}
+      {([[-3, 5, "#e74c3c"], [-2, 5, "#f1c40f"], [-2, 4, "#e74c3c"], [0, 5, "#f1c40f"], [1, 5, "#e74c3c"], [1, 4, "#f1c40f"]] as const).map(([c, r, color]) => (
+        <mesh key={`${c}-${r}`} position={[c * 0.11, 0.84 + (5 - r) * 0.095, 0]} rotation-x={Math.PI / 2}>
+          <cylinderGeometry args={[0.04, 0.04, 0.06, 12]} />
+          <meshStandardMaterial color={color} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
 function Whiteboard({ room }: { room: string | null }) {
   return (
     <>
@@ -299,5 +348,9 @@ export function Furniture({ type, room, zone, itemId }: { type: ItemType; room: 
       return <Elevator />;
     case "whiteboard":
       return <Whiteboard room={room} />;
+    case "arcade":
+      return <Arcade />;
+    case "gameTable":
+      return <GameTable />;
   }
 }

@@ -9,7 +9,7 @@ Built and load-tested for teams of ~50 people.
 | | |
 |---|---|
 | ![All-hands in the auditorium](docs/screenshots/auditorium.png) | ![Meeting room with whiteboard and raised hand](docs/screenshots/meeting-room.png) |
-| **Auditorium stage** on the 2nd floor: whoever is on stage is heard by the whole floor; the screen shows a website or screen share. | **Meeting rooms**: shared whiteboard, raised hands, booking schedule, lockable door. |
+| **Town hall stage** on the 1st floor: whoever is on stage is heard by the whole floor; the screen shows a website or screen share. | **Meeting rooms**: shared whiteboard, raised hands, booking schedule, lockable door. |
 | ![Lounge, third-person close-up](docs/screenshots/lounge-closeup.png) | ![Member list and direct messages](docs/screenshots/members-chat.png) |
 | **Zoom in** for a third-person view; zoom out for the bird's-eye view. | **Members & presence**: status, floor and area of everyone; DMs, locate, follow, summon. |
 | ![Avatar editor](docs/screenshots/avatar-editor.png) | |
@@ -28,7 +28,10 @@ The UI is available in **English and Indonesian** (switch on the sign-in screen 
 - Pick microphone / camera / speaker, **noise suppression** (with echo cancellation & auto gain), **push-to-talk** (hold Space).
 
 **Office life**
-- **Multiple floors** connected by an elevator; the default office has a workspace floor and an auditorium floor.
+- **Multiple floors** connected by an elevator; the default office has the workspace with a town hall on the 1st floor
+  and a game arcade on the 2nd floor.
+- **Arcade** — walk up to an arcade machine and press **F** to play Snake (shared leaderboard), or sit at a table for
+  a two-player game of Connect Four that anyone nearby can watch.
 - **Desks** — claim a desk and lock it (🔒 focus mode) so nobody can walk in.
 - **Doors** — open/close with **F**; people inside can lock the door, people outside can only knock.
 - **Room booking** — schedule a room; the current/next booking shows above its door.
@@ -63,7 +66,7 @@ low-quality mode kicks in when the frame rate drops. Touch joystick on mobile.
 |---|---|
 | WASD / arrows | Walk (relative to camera) · **Shift** to run |
 | Drag / Q·E · scroll | Rotate camera · zoom (close = third-person, far = top-down) |
-| C · F | Sit / stand · open, close or knock on a door |
+| C · F | Sit / stand · open, close or knock on a door, or play an arcade game |
 | Space | Push-to-talk (when enabled) |
 | 1 · 2 · 3 | Wave · thumbs up · dance |
 | M · V · Enter | Mic · camera · chat |
@@ -76,11 +79,41 @@ npm install
 npm run dev            # LiveKit (dev mode) + game server + client
 ```
 
-Open http://localhost:5173 and register — the first account becomes admin. Requires Node ≥ 20.
+Open http://localhost:5173 and register — the first account becomes admin. Requires Node ≥ 22 (Vite 8).
 
 To use LiveKit Cloud instead of the local dev server, copy `server/.env.example` to `server/.env` and fill in
 your credentials. **Always set real LiveKit credentials when deploying** — without them the server falls back to
 LiveKit's public dev keys.
+
+## Deploying with Dokploy
+
+`docker-compose.yml` runs two services: **app** (game server that also serves the built web client) and **livekit**
+(audio/video). Dokploy's Traefik provides the domains and HTTPS.
+
+1. **DNS** — point two subdomains at the server's public IP, e.g. `office.example.com` and `livekit.example.com`.
+2. **Firewall** — open **UDP 7882** and **TCP 7881** to the internet (audio/video goes straight to the server, not
+   through Traefik). On a cloud VPS open them in the provider's firewall / security group too, not only `ufw`.
+   If these are closed, people can sign in but won't hear or see each other.
+3. **Dokploy** — create a *Compose* service from this repo. In **Environment**, set the variables from
+   [`.env.example`](.env.example) (`LIVEKIT_DOMAIN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`; generate the key and
+   secret as described there).
+4. **Domains** — add `office.example.com` → service `app`, port `2567`, and `livekit.example.com` → service
+   `livekit`, port `7880`, both with HTTPS (Let's Encrypt). If your Dokploy version doesn't attach Compose services to
+   its network automatically, add the external `dokploy-network` to both services.
+5. Deploy, open `https://office.example.com` and register — the first account becomes admin.
+
+Data (accounts, chat, uploads, backups) lives in the `office-data` volume (`/data` in the container), so it survives
+redeploys. The app refuses to start in production without real LiveKit credentials.
+
+Behind Traefik the server reads the client IP from `X-Forwarded-For` (`TRUST_PROXY=1`) for sign-in rate limits:
+5 failed attempts per username per 15 minutes; per-IP limits are generous because a whole office may share one IP.
+
+Networks that allow nothing but port 443 (some corporate or hotel Wi-Fi) need TURN over TLS, which this setup doesn't
+include yet.
+
+**Production preview locally** (Node ≥ 22): `npm run build`, start `livekit-server` with real keys, then run
+`NODE_ENV=production LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=… LIVEKIT_API_SECRET=… npm start -w server`
+and open http://localhost:2567.
 
 ## Tests
 
@@ -92,6 +125,7 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 - `shared/layout.test.ts` — floor plan, areas, stage, doors, seats, elevators, validation.
 - `server/src/server.test.ts` — starts a real server and checks auth, invite codes, area-scoped chat, DMs, door locks,
   whiteboard privacy, floors & stage, passwords, guest links, bookings, uploads, reactions, search, screens.
+- `server/src/ratelimit.test.ts` — sign-in attempt limiter.
 - `client/src/i18n.test.ts` — every UI string has an English translation.
 - `e2e/smoke.test.ts` — two users sign up, chat, take the elevator and go on stage in a real browser.
 
@@ -106,5 +140,5 @@ e2e/      Browser end-to-end tests
 
 ## Roadmap
 
-- Deploy with HTTPS (camera/mic on other devices require it)
+- TURN over TLS for networks that only allow port 443
 - Google sign-in, Slack integration

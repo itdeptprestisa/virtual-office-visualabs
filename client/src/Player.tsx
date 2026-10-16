@@ -10,6 +10,7 @@ import { ANIM, EMOTE_KEYS } from "./anims";
 import { t as tr } from "./i18n";
 import { updateProximity, useMedia } from "./media";
 import { pointerLock, touchInput } from "./input";
+import { gameNear, openGame } from "./games";
 
 const WALK = 4;
 const RUN = 7;
@@ -323,12 +324,14 @@ export function Player() {
     const zone = here?.name ?? null;
     if (useNet.getState().zoneId !== (here?.id ?? null)) useNet.setState({ zone, zoneId: here?.id ?? null });
 
-    // Pintu terdekat: F untuk buka/tutup/ketuk.
+    // Pintu terdekat: F untuk buka/tutup/ketuk. Tanpa pintu di dekat, F membuka mesin arcade / meja game terdekat.
     const door = doorNear(t.x, t.z);
     if (useNet.getState().nearDoor !== (door?.id ?? null)) useNet.setState({ nearDoor: door?.id ?? null });
     if (pressed.current.has("KeyF")) {
       pressed.current.delete("KeyF");
+      const game = useNet.getState().nearGame;
       if (door) sendDoor(door.id, doorPrimaryAction(door.id, here?.id === door.room));
+      else if (game) openGame(game);
     }
 
     // Audio/video proximity + kursi terdekat (beberapa kali per detik saja).
@@ -340,6 +343,8 @@ export function Player() {
       if (useNet.getState().nearSeat !== near) useNet.setState({ nearSeat: near });
       const lift = currentWorld().elevators.some((e) => Math.hypot(e.exit[0] - t.x, e.exit[1] - t.z) < 2.2);
       if (useNet.getState().nearLift !== lift) useNet.setState({ nearLift: lift });
+      const game = gameNear(t.x, t.z);
+      if (useNet.getState().nearGame?.id !== game?.id) useNet.setState({ nearGame: game });
     }
 
     // Kirim posisi maks 15x/detik, hanya kalau berubah.

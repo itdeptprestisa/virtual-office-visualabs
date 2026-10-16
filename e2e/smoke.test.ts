@@ -109,15 +109,46 @@ test("chat Umum sampai ke orang lain; DM tersimpan", async () => {
   await ayu.waitForFunction(() => Object.values((window as any).__vo.useNet.getState().dms).flat().some((m: any) => m.text === "psst"));
 });
 
-test("naik lift ke lantai 2 lalu berdiri di panggung", async () => {
+test("lantai 2: main Empat Sejajar & Snake; avatar diam selama jendela game terbuka", async () => {
   await ayu.bringToFront();
   await ayu.evaluate(() => (window as any).__vo.teleport(16.9, 10.6));
   await ayu.waitForSelector(".lift button");
   await clickText(ayu, ".lift button", "Lantai 2");
   await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().floor === "f2");
-  await ayu.evaluate(() => (window as any).__vo.teleport(-9.75, -10.4));
-  await ayu.waitForSelector(".pill.stage", { timeout: 20_000 });
   await bima.waitForFunction(() => Object.values((window as any).__vo.useNet.getState().players).some((p: any) => p.name === "Ayu" && p.floor === "f2"));
+
+  await ayu.evaluate(() => (window as any).__vo.teleport(-8, -13.2)); // depan meja Empat Sejajar
+  await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().nearGame?.type === "gameTable", { timeout: 20_000 });
+  await clickText(ayu, ".desk-controls .pill", "Main Empat Sejajar");
+  await ayu.waitForSelector(".c4-board");
+  await clickText(ayu, ".c4-seat button", "Main sebagai merah");
+  await ayu.waitForFunction(() => document.querySelector(".c4-seats")?.textContent?.includes("Ayu"));
+  const pos = () => ayu.evaluate(() => [0, 2].map((i) => Math.round((window as any).__vo.selfPos.p[i] * 10) / 10));
+  const before = await pos();
+  await ayu.keyboard.down("KeyW"); // tombol gerak tidak menggerakkan avatar selama jendela terbuka
+  await new Promise((r) => setTimeout(r, 500));
+  await ayu.keyboard.up("KeyW");
+  assert.deepEqual(await pos(), before);
+  await ayu.keyboard.press("Escape");
+  await ayu.waitForSelector(".c4-board", { hidden: true });
+
+  await ayu.evaluate(() => (window as any).__vo.teleport(-4.5, -21.1)); // depan mesin arcade
+  await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().nearGame?.type === "arcade", { timeout: 20_000 });
+  await ayu.keyboard.press("KeyF");
+  await ayu.waitForSelector(".snake-canvas");
+  await ayu.keyboard.press("ArrowUp"); // tombol arah langsung memulai
+  await ayu.waitForSelector(".snake-cover", { hidden: true });
+  await ayu.keyboard.press("Escape");
+  await ayu.waitForSelector(".snake-canvas", { hidden: true });
+});
+
+test("town hall di lantai 1: berdiri di panggung", async () => {
+  await ayu.evaluate(() => (window as any).__vo.teleport(16.9, 10.6));
+  await ayu.waitForSelector(".lift button");
+  await clickText(ayu, ".lift button", "Lantai 1");
+  await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().floor === "f1");
+  await ayu.evaluate(() => (window as any).__vo.teleport(0, -21));
+  await ayu.waitForSelector(".pill.stage", { timeout: 20_000 });
 });
 
 test("tampilan bahasa Inggris", async () => {

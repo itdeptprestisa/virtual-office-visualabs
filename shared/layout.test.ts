@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROXIMITY, defaultLayout, derive, linkIn, sanitizeLayout, toWorld, zoneIn } from "./layout";
+import { PROXIMITY, WORLD, defaultLayout, derive, linkIn, sanitizeLayout, toWorld, zoneIn } from "./layout";
 
 const d = derive(defaultLayout()).f1;
 const d2 = derive(defaultLayout()).f2;
@@ -79,14 +79,37 @@ test("denah lama (v1, satu lantai) otomatis diubah ke v2", () => {
   assert.equal(l.floors[0].items[0].id, "d1");
 });
 
-test("panggung: terdengar oleh semua orang di lantai, kecuali yang di dalam ruangan", () => {
-  const stage: [number, number] = [-9.75, -10];
-  assert.equal(zoneIn(d2, ...stage)?.stage, true);
-  assert.deepEqual(linkIn(d2, -10, -4.6, ...stage), { distance: 0, volume: 1 }); // penonton di kursi aula
-  assert.deepEqual(linkIn(d2, 10.5, 7.5, ...stage), { distance: 0, volume: 1 }); // di Taman Atap pun dengar
-  assert.equal(linkIn(d2, 10.9, -8, ...stage).volume, 0); // di Ruang Kolaborasi (ruangan) tidak
+test("panggung town hall (Lantai 1): terdengar oleh semua orang di lantai, kecuali yang di dalam ruangan", () => {
+  const stage: [number, number] = [0, -21];
+  assert.equal(zoneIn(d, ...stage)?.stage, true);
+  assert.equal(zoneIn(d, ...stage)?.name, "Town Hall");
+  assert.deepEqual(linkIn(d, 0, -16, ...stage), { distance: 0, volume: 1 }); // penonton di kursi town hall
+  assert.deepEqual(linkIn(d, 12, 7.5, ...stage), { distance: 0, volume: 1 }); // di Lounge pun dengar
+  assert.equal(linkIn(d, 10.9, -7.5, ...stage).volume, 0); // di Ruang Meeting (ruangan) tidak
   // penonton tidak ikut "disiarkan": yang di panggung tidak mendengar penonton jauh
-  assert.equal(linkIn(d2, ...stage, -10, -3.2).volume, 0);
+  assert.equal(linkIn(d, ...stage, 0, -14.6).volume, 0);
+});
+
+test("town hall: semua kursi penonton di dalam gedung, di luar ruangan, menghadap panggung", () => {
+  const f1 = defaultLayout().floors[0];
+  const chairs = f1.items.filter((i) => i.type === "chair" && i.z < -13);
+  assert.equal(chairs.length, 45);
+  for (const c of chairs) {
+    assert.ok(c.z > WORLD.minZ && c.x > WORLD.minX && c.x < WORLD.maxX);
+    assert.equal(c.rot, 2);
+    assert.notEqual(zoneIn(d, c.x, c.z)?.kind, "room");
+  }
+  // Ruangan lama yang dulu menempel dinding utara kini berdinding kaca di sisi itu (bukan celah terbuka ke town hall).
+  assert.ok(d.walls.some((w) => w.orient === "x" && w.c === -12.85));
+});
+
+test("Lantai 2 = arcade: tanpa ruangan & area, ada mesin arcade dan meja Empat Sejajar", () => {
+  const f2 = defaultLayout().floors[1];
+  assert.equal(f2.rooms.length, 0);
+  assert.equal(f2.areas.length, 0);
+  assert.equal(f2.items.filter((i) => i.type === "arcade").length, 4);
+  assert.equal(f2.items.filter((i) => i.type === "gameTable").length, 4);
+  assert.equal(d2.seats.length, 8, "dua kursi per meja");
 });
 
 test("lift ada di kedua lantai dengan titik keluar di depan pintunya", () => {

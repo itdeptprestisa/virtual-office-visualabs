@@ -15,6 +15,7 @@ import { enableAudio, toggleCam, toggleMic, toggleScreen, useMedia, usePrefs } f
 import { PROXIMITY } from "../zones";
 import { toggleSit } from "../Player";
 import { useWhiteboard } from "../whiteboard";
+import { openGame } from "../games";
 import { STATUS, StatusDot } from "./MemberPanel";
 import { place, t, useT } from "../i18n";
 
@@ -37,6 +38,7 @@ export function ContextActions() {
   const doors = useNet((s) => s.doors);
   const myHand = useNet((s) => s.directory.find((u) => u.id === s.selfId)?.hand ?? false);
   const nearLift = useNet((s) => s.nearLift);
+  const nearGame = useNet((s) => s.nearGame);
   const layout = useNet((s) => s.layout);
   const floor = useNet((s) => s.floor);
   const isGuest = useNet((s) => s.me?.role === "guest");
@@ -84,6 +86,11 @@ export function ContextActions() {
             </button>
           ))}
         </div>
+      )}
+      {nearGame && !door && (
+        <button className="pill clickable accent" onClick={() => openGame(nearGame)}>
+          {nearGame.type === "arcade" ? "🕹️" : "🔴"} <b>F</b> · {nearGame.type === "arcade" ? t("Main Snake") : t("Main Empat Sejajar")}
+        </button>
       )}
       {(nearSeat || sitting) && (
         <button className="pill clickable accent" onClick={toggleSit}>

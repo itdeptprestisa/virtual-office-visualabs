@@ -16,8 +16,8 @@ export const useEditor = create<EditorState>(() => ({ active: false, selected: n
 
 export const SNAP = 0.25;
 export const snap = (v: number) => Math.round(v / SNAP) * SNAP;
-const clampX = (x: number) => Math.max(-WORLD.halfW + 0.3, Math.min(WORLD.halfW - 0.3, x));
-const clampZ = (z: number) => Math.max(-WORLD.halfD + 0.3, Math.min(WORLD.halfD - 0.3, z));
+const clampX = (x: number) => Math.max(WORLD.minX + 0.3, Math.min(WORLD.maxX - 0.3, x));
+const clampZ = (z: number) => Math.max(WORLD.minZ + 0.3, Math.min(WORLD.maxZ - 0.3, z));
 
 let sendTimer: ReturnType<typeof setTimeout> | null = null;
 

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { defaultLayout } from "../../shared/layout";
 
 // Integration test: server sungguhan (port & database sementara), beberapa klien WebSocket.
 
@@ -246,27 +247,27 @@ test("koneksi kedua akun yang sama mengeluarkan koneksi lama", async () => {
 
 async function member(username: string) {
   const { c, res } = await register(username, { invite: inviteCode });
-  assert.equal(res.t, "auth_ok", `daftar ${username}`);
+  assert.equal(res.t, "auth_ok", `daftar ${username}: ${res.reason ?? ""}`);
   return { c, id: res.user.id as string, token: res.token as string };
 }
 
-test("panggung di lantai 2 terdengar ke seluruh lantai kecuali ruangan; lantai lain tidak", async () => {
+test("panggung town hall di lantai 1 terdengar ke seluruh lantai kecuali ruangan; lantai lain tidak", async () => {
   const dodi = await member("dodi");
   const eva = await member("eva");
   const fajar = await member("fajar");
-  await dodi.c.enter([0, 0, 9]);
-  await eva.c.enter([0, 0, 9]);
-  await fajar.c.enter([0, 0, 9]);
-  dodi.c.send({ t: "floor", floor: "f2", p: [-9.75, 0, -10] }); // panggung aula
-  eva.c.send({ t: "floor", floor: "f2", p: [10.5, 0, 7.5] }); // taman atap
-  fajar.c.send({ t: "floor", floor: "f2", p: [10.9, 0, -8] }); // ruang kolaborasi
+  const gina = await member("gina");
+  await dodi.c.enter([0, 0, -21]); // panggung town hall
+  await eva.c.enter([12, 0, 7.5]); // lounge
+  await fajar.c.enter([10.9, 0, -7.5]); // ruang meeting
+  await gina.c.enter([0, 0, 9]);
+  gina.c.send({ t: "floor", floor: "f2", p: [0, 0, 0] }); // lantai 2
   await sleep(300);
   dodi.c.send({ t: "chat", channel: "area", text: "pengumuman all-hands" });
   const got = await eva.c.wait("chat", (m) => m.text === "pengumuman all-hands");
-  assert.equal(got.scope, "Panggung Aula");
+  assert.equal(got.scope, "Town Hall");
   await fajar.c.none("chat", (m) => m.text === "pengumuman all-hands");
-  await adminC.none("chat", (m) => m.text === "pengumuman all-hands"); // lantai 1
-  for (const x of [dodi, eva, fajar]) x.c.close();
+  await gina.c.none("chat", (m) => m.text === "pengumuman all-hands");
+  for (const x of [dodi, eva, fajar, gina]) x.c.close();
 });
 
 test("ganti password sendiri & reset password oleh admin", async () => {
@@ -381,4 +382,82 @@ test("website di layar presentasi: hanya dari dalam ruangannya & wajib https", a
   const s = await adminC.wait("screens", (m) => m.map[screen] === "https://example.com");
   assert.ok(s);
   kiki.c.close();
+});
+
+test("login gagal 5× untuk satu username diblokir sementara, password benar pun ditolak", async () => {
+  const { c: reg } = await register("kunci");
+  reg.close();
+  const c = await new Client().open();
+  for (let i = 0; i < 5; i++) {
+    c.send({ t: "login", username: "kunci", password: "salah" });
+    assert.equal((await c.wait("auth_error")).reason, "Username atau password salah.");
+  }
+  c.close();
+  const c2 = await new Client().open(); // koneksi baru tidak mengosongkan hitungan
+  c2.send({ t: "login", username: "kunci", password: "rahasia123" });
+  assert.match((await c2.wait("auth_error")).reason, /^Terlalu banyak percobaan\. Coba lagi dalam \d+ menit\.$/);
+  c2.close();
+});
+
+// ---------- game Lantai 2 ----------
+
+const f2Items = defaultLayout().floors[1].items;
+const arcade = f2Items.find((i) => i.type === "arcade")!;
+const table = f2Items.find((i) => i.type === "gameTable")!;
+
+async function onFloor2(username: string, p: [number, number, number]) {
+  const m = await member(username);
+  await m.c.enter([0, 0, 9]);
+  m.c.send({ t: "floor", floor: "f2", p });
+  await sleep(150);
+  return m;
+}
+
+test("arcade Snake: skor hanya dari dekat mesin, satu entri terbaik per orang, urut tertinggi", async () => {
+  const hana = await onFloor2("g.hana", [arcade.x, 0, arcade.z + 1.2]);
+  const jauh = await onFloor2("g.jauh", [10, 0, 10]);
+  jauh.c.send({ t: "arcade_score", game: "snake", machine: arcade.id, score: 99 });
+  await hana.c.none("arcade_scores");
+  hana.c.send({ t: "arcade_score", game: "snake", machine: arcade.id, score: 12 });
+  assert.deepEqual((await hana.c.wait("arcade_scores")).top.map((e: any) => [e.name, e.score]), [["G.HANA", 12]]);
+  hana.c.send({ t: "arcade_score", game: "snake", machine: arcade.id, score: 5 }); // lebih rendah: diabaikan
+  await hana.c.none("arcade_scores");
+  hana.c.send({ t: "arcade_score", game: "snake", machine: arcade.id, score: 1.5 }); // bukan bilangan bulat
+  await hana.c.none("arcade_scores");
+  hana.c.send({ t: "arcade_scores", game: "snake" });
+  assert.equal((await hana.c.wait("arcade_scores")).top[0].score, 12);
+  for (const x of [hana, jauh]) x.c.close();
+});
+
+test("Empat Sejajar: dua pemain bergiliran, server menentukan pemenang; penonton jauh tidak bisa ikut", async () => {
+  const ika = await onFloor2("g.ika", [table.x, 0, table.z - 1.1]);
+  const joni = await onFloor2("g.joni", [table.x, 0, table.z + 1.1]);
+  const jauh = await onFloor2("g.kiki", [10, 0, 10]);
+  jauh.c.send({ t: "c4_join", table: table.id, seat: 0 });
+  await jauh.c.none("c4_state");
+  ika.c.send({ t: "c4_join", table: table.id, seat: 0 });
+  await joni.c.wait("c4_state", (m) => m.seats[0]?.name === "G.IKA");
+  joni.c.send({ t: "c4_join", table: table.id, seat: 0 }); // kursi merah sudah terisi
+  assert.equal((await joni.c.wait("notice")).text, "Kursi itu sudah terisi.");
+  joni.c.send({ t: "c4_join", table: table.id, seat: 1 });
+  for (const x of [ika, joni, jauh]) await x.c.wait("c4_state", (m) => m.seats[1]?.name === "G.JONI");
+  jauh.c.drain("c4_state");
+  joni.c.send({ t: "c4_drop", table: table.id, col: 3 }); // bukan gilirannya
+  await joni.c.none("c4_state");
+  // Merah menumpuk di kolom 0, kuning di kolom 1 → merah menang di langkah ke-7.
+  const moves: [typeof ika, number][] = [[ika, 0], [joni, 1], [ika, 0], [joni, 1], [ika, 0], [joni, 1], [ika, 0]];
+  let last: any;
+  for (const [who, col] of moves) {
+    who.c.send({ t: "c4_drop", table: table.id, col });
+    last = await jauh.c.wait("c4_state"); // penonton di lantai yang sama ikut melihat
+  }
+  assert.equal(last.result, 1);
+  assert.equal(last.line.length, 4);
+  joni.c.send({ t: "c4_drop", table: table.id, col: 2 }); // permainan sudah selesai
+  await joni.c.none("c4_state", (m) => m.board.filter((v: number) => v).length > 7);
+  // Pemain keluar → kursinya kosong & papan diulang.
+  ika.c.close();
+  const after = await joni.c.wait("c4_state", (m) => m.seats[0] === null);
+  assert.equal(after.board.filter((v: number) => v).length, 0);
+  for (const x of [joni, jauh]) x.c.close();
 });

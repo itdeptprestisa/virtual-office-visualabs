@@ -1,0 +1,38 @@
+# Produksi (Dokploy): app + LiveKit. Isi variabel di .env (lihat .env.example) atau tab Environment Dokploy.
+# Domain & HTTPS dipasang di Dokploy (tab Domains): app → port 2567, livekit → port 7880.
+# Suara/video TIDAK lewat Traefik: port 7882/udp & 7881/tcp wajib dibuka di firewall server.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: "1"
+      LIVEKIT_URL: wss://${LIVEKIT_DOMAIN:?isi LIVEKIT_DOMAIN}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?isi LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?isi LIVEKIT_API_SECRET}
+    volumes:
+      - office-data:/data
+    expose:
+      - "2567"
+
+  livekit:
+    image: livekit/livekit-server:v1.13.9
+    restart: unless-stopped
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: ${LIVEKIT_EXTERNAL_IP:-true}
+    ports:
+      - "7881:7881/tcp"
+      - "7882:7882/udp"
+    expose:
+      - "7880"
+
+volumes:
+  office-data:

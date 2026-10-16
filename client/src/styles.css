@@ -465,3 +465,43 @@ code.big { display: block; font-size: 22px; padding: 10px 14px; text-align: cent
 .lang-switch { display: inline-flex; background: #f1ebe1; border-radius: 8px; padding: 2px; }
 .lang-switch button { font: inherit; font-size: 12px; font-weight: 600; border: 0; background: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; color: var(--muted); }
 .lang-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+
+/* ---------- game Lantai 2 ---------- */
+.card.game { width: min(640px, 100%); gap: 12px; outline: none; }
+.card.game h2 { margin: 0; }
+.snake { display: grid; grid-template-columns: minmax(0, 360px) minmax(160px, 1fr); gap: 16px; align-items: start; }
+.snake-play { position: relative; display: grid; gap: 8px; }
+.snake-canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: 12px; image-rendering: pixelated; }
+.snake-cover {
+  position: absolute; inset: 0; bottom: auto; aspect-ratio: 1; display: grid; place-content: center; justify-items: center; gap: 10px;
+  color: #eafff0; background: rgba(11, 26, 15, 0.72); border-radius: 12px; font-size: 18px;
+}
+.snake-pad { display: none; grid-template-columns: repeat(3, 48px); grid-template-areas: ". up ." "left down right"; gap: 6px; justify-content: center; }
+.snake-pad .pill { justify-content: center; font-size: 18px; padding: 8px 0; }
+.snake-pad .pad-ArrowUp { grid-area: up; }
+.snake-pad .pad-ArrowLeft { grid-area: left; }
+.snake-pad .pad-ArrowDown { grid-area: down; }
+.snake-pad .pad-ArrowRight { grid-area: right; }
+.compact .snake-pad { display: grid; }
+.scoreboard { display: grid; gap: 8px; }
+.scoreboard h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.scoreboard ol { margin: 0; padding-left: 22px; display: grid; gap: 4px; font-size: 14px; }
+.scoreboard li span { display: inline-block; min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; margin-right: 8px; }
+.scoreboard li.me { font-weight: 600; color: #2f6b3f; }
+@media (max-width: 560px) { .snake { grid-template-columns: 1fr; } }
+
+.c4 { display: grid; gap: 10px; justify-items: center; }
+.c4-seats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.c4-seat { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #f6f1e9; }
+.c4-seat.turn { box-shadow: inset 0 0 0 2px var(--ink); }
+.c4-dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; }
+.c4-dot.red, .c4-cell.red { background: #e74c3c; }
+.c4-dot.yellow, .c4-cell.yellow { background: #f1c40f; }
+.c4-status { margin: 0; font-weight: 600; text-align: center; }
+.c4-board { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 10px; border-radius: 14px; background: #2c5fd6; width: min(420px, 100%); }
+.c4-cell { aspect-ratio: 1; border-radius: 50%; border: 0; padding: 0; background: #dfe7f5; cursor: default; }
+.c4-cell:not(:disabled) { cursor: pointer; }
+.c4-cell.hover:not(.red):not(.yellow) { background: #b9c9ec; }
+.c4-cell.last { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.7); }
+.c4-cell.win { box-shadow: inset 0 0 0 4px #fff, 0 0 10px #fff; }
+.c4-actions { display: flex; gap: 8px; }
