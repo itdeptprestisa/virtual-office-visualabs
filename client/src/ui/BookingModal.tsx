@@ -51,7 +51,7 @@ export function BookingModal() {
           <h2>
           <CalendarBlankIcon /> {t("Jadwal ruangan")}
         </h2>
-          <button className="x" onClick={close} aria-label={t("Tutup")}>
+          <button className="x" onClick={close} aria-label={t("Tutup")} title={t("Tutup")}>
             ×
           </button>
         </div>

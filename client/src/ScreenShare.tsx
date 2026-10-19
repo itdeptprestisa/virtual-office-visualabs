@@ -36,7 +36,7 @@ function ScreenCard({ id, track, onOpen }: { id: string; track: Track; onOpen: (
           <MonitorIcon /> {name}
         </span>
         {id === selfId && (
-          <button className="link" onClick={toggleScreen}>
+          <button className="link" onClick={toggleScreen} title={t("Berhenti share screen")}>
             {t("Berhenti")}
           </button>
         )}

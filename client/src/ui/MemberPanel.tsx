@@ -46,7 +46,7 @@ export function MemberPanel({ onClose }: { onClose: () => void }) {
         <span className="muted small">
           {t("{n} online · {m} terdaftar", { n: online + 1, m: users.length })}
         </span>
-        <button className="x" onClick={onClose} aria-label={t("Tutup")}>
+        <button className="x" onClick={onClose} aria-label={t("Tutup")} title={t("Tutup")}>
           ×
         </button>
       </div>

@@ -40,7 +40,7 @@ export function GameModal() {
           <h2>
             {open.type === "arcade" ? <JoystickIcon /> : <CirclesFourIcon />} {open.type === "arcade" ? "Snake" : t("Empat Sejajar")}
           </h2>
-          <button className="x" onClick={closeGame} aria-label={t("Tutup")}>
+          <button className="x" onClick={closeGame} aria-label={t("Tutup")} title={t("Tutup")}>
             ×
           </button>
         </div>

@@ -274,7 +274,7 @@ const broadcast = (msg: unknown, exceptId?: string) => sendTo((pl) => pl.id !== 
 
 const publicView = (pl: Player) => ({ id: pl.id, name: pl.user.name, avatar: pl.user.avatar, floor: pl.floor, p: pl.p, r: pl.r, a: pl.a });
 
-const selfView = (u: User) => ({ id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar, ical: u.ical, guestExp: u.guestExp ?? null });
+const selfView = (u: User) => ({ id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar, ical: u.ical, guestExp: u.guestExp ?? null, tour: u.tourPending === true });
 
 function adminState() {
   const now = Date.now();
@@ -538,6 +538,7 @@ wss.on("connection", (ws, req) => {
           createdAt: Date.now(),
           lastPos: null,
           guestExp: link.exp,
+          tourPending: true,
         };
         db.users.push(u);
         save();
@@ -572,6 +573,7 @@ wss.on("connection", (ws, req) => {
           ical: null,
           createdAt: Date.now(),
           lastPos: null,
+          tourPending: true,
         };
         db.users.push(u);
         save();
@@ -824,6 +826,15 @@ function handle(me: Player, msg: any) {
       const target = players.get(String(msg.to));
       if (!target || target === me) return;
       send(target.ws, { t: "summon", from: me.id, name: me.user.name, place: me.zone?.name ?? null, floor: me.floor, floorName: floorName(me.floor), p: me.p });
+      return;
+    }
+    case "tour_done": {
+      // Tur pertama selesai atau dilewati: tidak muncul otomatis lagi di perangkat mana pun.
+      if (me.user.tourPending) {
+        delete me.user.tourPending;
+        save();
+      }
+      send(me.ws, { t: "tour_ok" });
       return;
     }
     case "hand": {

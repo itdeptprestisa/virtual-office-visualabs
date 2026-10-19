@@ -27,7 +27,8 @@ function fallbackTo2D() {
   useGraphics.getState().setView("2d");
   showNotice(t("Tampilan 3D gagal dimuat — kembali ke 2D. Muat ulang halaman untuk mencoba lagi."));
 }
-import { ContextActions, HelpPanel, MediaBar, Notice, Toolbar, TopLeft, totalUnread, type Panel } from "./ui/Hud";
+import { ContextActions, MediaBar, Notice, Toolbar, TopLeft, totalUnread, type Panel } from "./ui/Hud";
+import { HelpModal, Tour, startTour } from "./ui/Guide";
 
 // Ubah avatar di tengah permainan; perubahan langsung terlihat oleh semua orang.
 function AvatarModal({ onClose }: { onClose: () => void }) {
@@ -123,6 +124,10 @@ function Office() {
   useIdleStatus();
   useTitleBadge();
   useRoomBoard();
+  // Akun baru: tur singkat sekali saat pertama masuk kantor (pengguna lama lewat tombol ? → Ulangi tur).
+  useEffect(() => {
+    if (useNet.getState().me?.tour) startTour();
+  }, []);
 
   useEffect(() => {
     const mq = matchMedia(COMPACT);
@@ -151,7 +156,7 @@ function Office() {
       <SummonPrompt />
       <MediaBar />
       <ChatPanel />
-      {compact ? <Joystick /> : <HelpPanel />}
+      {compact && <Joystick />}
       <EditorPanel />
       <WhiteboardModal />
       <BookingModal />
@@ -162,6 +167,8 @@ function Office() {
       {panel === "admin" && <AdminPanel onClose={() => setPanel(null)} />}
       {panel === "settings" && <SettingsModal onClose={() => setPanel(null)} />}
       {panel === "avatar" && <AvatarModal onClose={() => setPanel(null)} />}
+      {panel === "help" && <HelpModal onClose={() => setPanel(null)} />}
+      <Tour />
     </div>
   );
 }

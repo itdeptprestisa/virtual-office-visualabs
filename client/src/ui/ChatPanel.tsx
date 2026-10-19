@@ -49,7 +49,12 @@ function ReactionBar({ reactions, selfId, onReact }: { reactions?: Reactions; se
   return (
     <div className="reactions">
       {entries.map(([emoji, users]) => (
-        <button key={emoji} className={selfId && users.includes(selfId) ? "react mine" : "react"} onClick={() => onReact(emoji)}>
+        <button
+          key={emoji}
+          className={selfId && users.includes(selfId) ? "react mine" : "react"}
+          onClick={() => onReact(emoji)}
+          title={selfId && users.includes(selfId) ? t("Batalkan reaksimu") : t("Ikut beri reaksi ini")}
+        >
           {emoji} {users.length}
         </button>
       ))}
@@ -100,6 +105,7 @@ function SearchView({ onClose }: { onClose: () => void }) {
           <button
             key={r.id}
             className="chat-line result"
+            title={t("Buka percakapan ini")}
             onClick={() => {
               openChatTab(r.channel === "umum" ? "umum" : `dm:${r.with}`);
               onClose();
@@ -205,7 +211,7 @@ export function ChatPanel() {
 
   if (!open) {
     return (
-      <button className="chat-toggle pill clickable" onClick={() => openChatTab(tab)}>
+      <button className="chat-toggle pill clickable" onClick={() => openChatTab(tab)} title={t("Buka chat (Enter)")}>
         <ChatCircleDotsIcon /> {t("Chat")} <Badge n={totalUnread(unread)} />
       </button>
     );
@@ -238,10 +244,10 @@ export function ChatPanel() {
           const dmTab: ChatTab = `dm:${id}`;
           return (
             <span key={id} className={tab === dmTab ? "tab active dm" : "tab dm"}>
-              <button onClick={() => openChatTab(dmTab)}>
+              <button onClick={() => openChatTab(dmTab)} title={t("Pesan langsung dengan {name}", { name: u?.name ?? "?" })}>
                 <span className={u?.online ? "dot-online" : "dot-online off"} /> {u?.name ?? "?"} <Badge n={unread[dmTab]} />
               </button>
-              <button className="x" onClick={() => closeDm(id)} aria-label={t("Tutup percakapan")}>
+              <button className="x" onClick={() => closeDm(id)} aria-label={t("Tutup percakapan")} title={t("Tutup percakapan")}>
                 ×
               </button>
             </span>
@@ -250,7 +256,7 @@ export function ChatPanel() {
         <button className={searching ? "tab active" : "tab"} onClick={() => setSearching(!searching)} title={t("Cari pesan")} aria-label={t("Cari pesan")}>
           <MagnifyingGlassIcon />
         </button>
-        <button className="tab collapse" onClick={() => useNet.setState({ chatOpen: false })} aria-label={t("Sembunyikan chat")}>
+        <button className="tab collapse" onClick={() => useNet.setState({ chatOpen: false })} aria-label={t("Sembunyikan chat")} title={t("Sembunyikan chat")}>
           ▾
         </button>
       </div>

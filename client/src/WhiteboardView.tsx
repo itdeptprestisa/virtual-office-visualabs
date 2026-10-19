@@ -73,7 +73,7 @@ export function WhiteboardModal() {
           </b>
           <div className="wb-tools">
             {COLORS.map((c) => (
-              <button key={c} className={c === color ? "swatch active" : "swatch"} style={{ background: c }} onClick={() => setColor(c)} aria-label={`${t("Warna")} ${c}`} />
+              <button key={c} className={c === color ? "swatch active" : "swatch"} style={{ background: c }} onClick={() => setColor(c)} aria-label={`${t("Warna")} ${c}`} title={t("Pilih warna spidol")} />
             ))}
             <button className={color === ERASER ? "chip active" : "chip"} onClick={() => setColor(ERASER)}>
               {t("Penghapus")}

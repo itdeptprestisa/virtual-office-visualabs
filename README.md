@@ -34,6 +34,11 @@ layouts keep it.
 position, chat and calls stay as they are. Both views share the same game logic and collision sizes. The avatar
 editor previews the avatar in whichever view is active (a turning 2D figure, or a rotatable 3D model).
 
+**Help & first-run tour** — new accounts (and guests) get a short skippable tour the first time they enter, spotlighting
+movement, audio, chat, desks, rooms and floors; it's remembered per account, not per device. The **?** button opens a
+full guide that adapts to the active view (2D/3D) and to touch devices, and can replay the tour. Every action button
+has a tooltip explaining what it does.
+
 **Spatial audio & video (LiveKit)**
 - **Areas** — rooms (glass walls + door), open areas (lounge, pantry, rooftop) and every desk. Everyone in the same
   area is connected at full volume; people outside can't listen in.
@@ -94,6 +99,7 @@ matrix update (it cost ~2–3 ms per pass while walking). Walking through the bu
 | Space | Push-to-talk (when enabled) |
 | 1 · 2 · 3 | Wave · thumbs up · dance |
 | M · V · Enter | Mic · camera · chat |
+| ? (top right) | Help — full guide and replay the tour |
 
 ## Getting started
 
@@ -148,7 +154,8 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 
 - `shared/layout.test.ts` — floor plan, areas, stage, doors, seats, elevators, validation.
 - `server/src/server.test.ts` — starts a real server and checks auth, invite codes, area-scoped chat, DMs, door locks,
-  whiteboard privacy, floors & stage, passwords, guest links, bookings, uploads, reactions, search, screens.
+  whiteboard privacy, floors & stage, passwords, guest links, bookings, uploads, reactions, search, screens, and the
+  first-run tour flag.
 - `server/src/ratelimit.test.ts` — sign-in attempt limiter.
 - `server/src/migrate.test.ts` — one-time data migrations (older saved floor plans get the default decorations once).
 - `client/src/controller.test.ts` — shared avatar logic (input, sitting, doors, focus desks, zones, position sync).

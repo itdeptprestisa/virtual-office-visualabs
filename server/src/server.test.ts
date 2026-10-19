@@ -491,3 +491,19 @@ test("Empat Sejajar: dua pemain bergiliran, server menentukan pemenang; penonton
   assert.equal(after.board.filter((v: number) => v).length, 0);
   for (const x of [joni, jauh]) x.c.close();
 });
+
+test("tur pertama: akun baru ditandai perlu tur sampai selesai/dilewati (tersimpan di akun, bukan perangkat)", async () => {
+  const { c, res } = await register("turis", { invite: inviteCode }); // tes sebelumnya menyalakan mode undangan
+  assert.equal(res.t, "auth_ok");
+  assert.equal(res.user.tour, true);
+  await c.enter([0, 0, 10]);
+  c.send({ t: "tour_done" });
+  await c.wait("tour_ok");
+  c.close();
+  // Masuk lagi dari "perangkat lain" dengan sesi yang sama: tur tidak muncul lagi.
+  const c2 = await new Client().open();
+  c2.send({ t: "resume", token: res.token });
+  const again = await c2.wait("auth_ok");
+  assert.equal(again.user.tour, false);
+  c2.close();
+});

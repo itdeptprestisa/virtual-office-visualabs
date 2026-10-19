@@ -170,7 +170,7 @@ export function EditorPanel() {
         <b>
           <PencilSimpleIcon /> {t("Edit denah")}
         </b>
-        <button className="x" onClick={() => useEditor.setState({ active: false, selected: null })} aria-label={t("Selesai")}>
+        <button className="x" onClick={() => useEditor.setState({ active: false, selected: null })} aria-label={t("Selesai")} title={t("Selesai mengedit denah")}>
           ×
         </button>
       </div>

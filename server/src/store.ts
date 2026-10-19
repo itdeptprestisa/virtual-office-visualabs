@@ -22,6 +22,7 @@ export interface User {
   lastPos: [number, number, number] | null;
   lastFloor?: string;
   guestExp?: number; // akun tamu: dihapus otomatis setelah waktu ini
+  tourPending?: boolean; // akun baru: tur pertama belum diselesaikan/dilewati (akun lama tanpa field ini = tidak)
 }
 
 export interface FileRef {

@@ -51,6 +51,7 @@ export interface Me {
   avatar: AvatarConfig | null;
   ical: string | null;
   guestExp: number | null;
+  tour?: boolean; // akun baru: tur pertama belum diselesaikan/dilewati
 }
 
 export interface ChatMessage {
@@ -694,6 +695,11 @@ export function sendStatus(patch: { manual?: "available" | "busy" | "away"; idle
 
 export const sendSummon = (to: string) => send({ t: "summon", to });
 export const sendHand = (up: boolean) => send({ t: "hand", up });
+/** Tur pertama selesai/dilewati: dicatat di akun supaya tidak muncul otomatis lagi. */
+export function finishTour() {
+  send({ t: "tour_done" });
+  useNet.setState((s) => ({ me: s.me && { ...s.me, tour: false } }));
+}
 export const sendMuteRoom = () => send({ t: "mute_room" });
 export const sendWhiteboard = (msg: Record<string, unknown>) => send(msg);
 export const sendGame = (msg: Record<string, unknown>) => send(msg);

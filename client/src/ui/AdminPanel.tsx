@@ -105,7 +105,7 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
         <b>
           <WrenchIcon /> Admin
         </b>
-        <button className="x" onClick={onClose} aria-label={t("Tutup")}>
+        <button className="x" onClick={onClose} aria-label={t("Tutup")} title={t("Tutup")}>
           ×
         </button>
       </div>
