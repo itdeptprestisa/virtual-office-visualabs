@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "dev": "bun --bun vite --host",
+    "build": "tsc --noEmit && bun --bun vite build",
+    "preview": "bun --bun vite preview"
   },
   "dependencies": {
     "@fontsource-variable/nunito": "^5.3.0",

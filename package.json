@@ -6,12 +6,12 @@
     "server"
   ],
   "scripts": {
-    "dev": "concurrently -n livekit,server,client -c yellow,magenta,cyan \"npm run dev:livekit\" \"npm run dev -w server\" \"npm run dev -w client\"",
-    "build": "npm run build -w server && npm run build -w client",
+    "dev": "concurrently -n livekit,server,client -c yellow,magenta,cyan \"bun run dev:livekit\" \"bun run --cwd server dev\" \"bun run --cwd client dev\"",
+    "build": "bun run --cwd server typecheck && bun run --cwd client build",
     "dev:livekit": "livekit-server --dev --bind 0.0.0.0",
-    "test": "tsx --test shared/*.test.ts server/src/*.test.ts client/src/*.test.ts client/src/world2d/*.test.ts client/src/world2d/draw/*.test.ts",
-    "test:e2e": "tsx --test e2e/*.test.ts",
-    "test:e2e:3d": "E2E_VIEW=3d tsx --test e2e/*.test.ts"
+    "test": "bun test --timeout 60000 shared server/src client/src",
+    "test:e2e": "bun test --timeout 600000 e2e",
+    "test:e2e:3d": "E2E_VIEW=3d bun test --timeout 600000 e2e"
   },
   "devDependencies": {
     "concurrently": "^10.0.6",

@@ -114,11 +114,12 @@ matrix update (it cost ~2–3 ms per pass while walking). Walking through the bu
 
 ```bash
 brew install livekit   # once — local audio/video server
-npm install
-npm run dev            # LiveKit (dev mode) + game server + client
+bun install
+bun run dev            # LiveKit (dev mode) + game server + client
 ```
 
-Open http://localhost:5173 and register — the first account becomes admin. Requires Node ≥ 22 (Vite 8).
+Open http://localhost:5173 and register — the first account becomes admin. Requires [Bun](https://bun.sh) ≥ 1.3 — it's the package manager, the server runtime (TypeScript runs directly, no
+build step), the test runner, and it runs Vite.
 
 To use LiveKit Cloud instead of the local dev server, copy `server/.env.example` to `server/.env` and fill in
 your credentials. **Always set real LiveKit credentials when deploying** — without them the server falls back to
@@ -159,15 +160,15 @@ port 5349). Relayed traffic flows through your server, so it costs bandwidth.
 **Capacity** — up to **100 people** online at once (`MAX_PLAYERS` in `server/src/index.ts`, matching
 `room.max_participants` in `docker-compose.yml`); the 101st sees "office is full". Change both together.
 
-**Production preview locally** (Node ≥ 22): `npm run build`, start `livekit-server` with real keys, then run
-`NODE_ENV=production LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=… LIVEKIT_API_SECRET=… npm start -w server`
+**Production preview locally**: `bun run build`, start `livekit-server` with real keys, then run
+`NODE_ENV=production LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=… LIVEKIT_API_SECRET=… bun run --cwd server start`
 and open http://localhost:2567.
 
 ## Tests
 
 ```bash
-npm test               # unit + integration: area/stage rules, calendar parsing, server protocol, translations
-npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH)
+bun run test           # unit + integration: area/stage rules, calendar parsing, server protocol, translations
+bun run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH)
 ```
 
 - `shared/layout.test.ts` — floor plan, areas, stage, doors, seats, elevators, validation.
@@ -183,7 +184,7 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 - `client/src/chairStyle.test.ts` — executive & guest chairs only in managers' / C-level offices.
 - `client/src/i18n.test.ts` — every UI string has an English translation.
 - `e2e/smoke.test.ts` — two users sign up, chat, take the elevator, go on stage and switch 2D ↔ 3D in a real browser
-  (`npm run test:e2e` runs it in 2D, `npm run test:e2e:3d` in 3D).
+  (`bun run test:e2e` runs it in 2D, `bun run test:e2e:3d` in 3D).
 
 ## Project layout
 
@@ -191,7 +192,7 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 client/   Vite + React + Zustand + LiveKit client; 2D view (Canvas 2D, client/src/world2d/) and lazy-loaded
           3D view (React Three Fiber + Rapier); shared avatar logic in client/src/controller.ts;
           3D furniture in client/src/Furniture.tsx (shape primitives in shapes3d.tsx), avatars in avatar/Character.tsx
-server/   Node + ws (game state, chat, accounts, files) + LiveKit tokens; data in server/data/
+server/   Bun + ws (game state, chat, accounts, files) + LiveKit tokens; data in server/data/
 shared/   Floor-plan model, area/stage rules & furniture collider sizes, used by both server and client
 e2e/      Browser end-to-end tests
 ```

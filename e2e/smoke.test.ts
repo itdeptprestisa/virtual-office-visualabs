@@ -9,7 +9,7 @@ import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 // Tes end-to-end di browser sungguhan: server + client dev dinyalakan di port acak dengan database sementara,
 // lalu dua user menjalankan alur utama. Butuh Chrome/Chromium terpasang (atau CHROME_PATH).
-//   npm run test:e2e
+//   bun run test:e2e
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SERVER_PORT = 31000 + Math.floor(Math.random() * 1000);
@@ -42,8 +42,8 @@ function start(cmd: string, args: string[], cwd: string, env: Record<string, str
 
 before(async () => {
   if (!CHROME) throw new Error("Chrome tidak ditemukan — set CHROME_PATH");
-  await start(process.execPath, ["--import", "tsx", "src/index.ts"], join(ROOT, "server"), { PORT: String(SERVER_PORT), DATA_FILE: join(dir, "db.json") }, /jalan di/);
-  await start(join(ROOT, "node_modules/.bin/vite"), ["--port", String(CLIENT_PORT), "--strictPort"], join(ROOT, "client"), { VITE_SERVER_URL: `ws://localhost:${SERVER_PORT}` }, /Local:/);
+  await start(process.execPath, ["src/index.ts"], join(ROOT, "server"), { PORT: String(SERVER_PORT), DATA_FILE: join(dir, "db.json") }, /jalan di/);
+  await start(process.execPath, ["--bun", join(ROOT, "node_modules/vite/bin/vite.js"), "--port", String(CLIENT_PORT), "--strictPort"], join(ROOT, "client"), { VITE_SERVER_URL: `ws://localhost:${SERVER_PORT}` }, /Local:/);
   browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,

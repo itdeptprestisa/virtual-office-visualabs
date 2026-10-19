@@ -84,7 +84,7 @@ async function register(username: string, extra: Record<string, unknown> = {}) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 before(async () => {
-  server = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+  server = spawn(process.execPath, ["src/index.ts"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)), // folder server/, dari mana pun tes dijalankan
     env: { ...process.env, PORT: String(PORT), DATA_FILE: join(dir, "db.json") },
     stdio: ["ignore", "pipe", "pipe"],

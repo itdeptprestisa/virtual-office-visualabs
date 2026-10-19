@@ -18,7 +18,7 @@ after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
 
 async function runServer() {
   const port = 27670 + Math.floor(Math.random() * 1000);
-  const server: ChildProcess = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+  const server: ChildProcess = spawn(process.execPath, ["src/index.ts"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { ...process.env, PORT: String(port), DATA_FILE },
     stdio: ["ignore", "pipe", "pipe"],
