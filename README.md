@@ -1,6 +1,6 @@
 # Virtual Office
 
-A 3D virtual office in the browser, in the spirit of Gather and ZEP — walk around as a customizable avatar,
+A 2D/3D virtual office in the browser, in the spirit of Gather and ZEP — walk around as a customizable avatar,
 talk to whoever is near you, drop into rooms for private meetings, and gather everyone for an all-hands on stage.
 Built and load-tested for teams of ~50 people.
 
@@ -12,12 +12,24 @@ Built and load-tested for teams of ~50 people.
 | **Town hall stage** on the 1st floor: whoever is on stage is heard by the whole floor; the screen shows a website or screen share. | **Meeting rooms**: shared whiteboard, raised hands, booking schedule, lockable door. |
 | ![Lounge, third-person close-up](docs/screenshots/lounge-closeup.png) | ![Member list and direct messages](docs/screenshots/members-chat.png) |
 | **Zoom in** for a third-person view; zoom out for the bird's-eye view. | **Members & presence**: status, floor and area of everyone; DMs, locate, follow, summon. |
-| ![Avatar editor](docs/screenshots/avatar-editor.png) | |
-| **Avatar editor**: body, skin tone, hair or hijab, outfit, colors, glasses, hats. | |
+| ![Avatar editor](docs/screenshots/avatar-editor.png) | ![CEO office with executive chair, sofas and leather guest chairs](docs/screenshots/executive-office.png) |
+| **Avatar editor**: body, skin tone, hair or hijab, outfit, colors, glasses, hats — semi-realistic proportions and face in 3D. | **Executive offices**: high-back leather executive chair, sofa corner and leather guest chairs for managers and C-level. |
 
 The UI is available in **English and Indonesian** (switch on the sign-in screen or in Settings).
 
 ## Features
+
+**Look** — colour-coded duotone icons (Phosphor) and the Nunito typeface, bundled with the app (no external font/CDN calls).
+The 3D view is **semi-realistic** without downloading any 3D models: furniture is built in code from bevelled and
+rounded shapes with a wood-grain texture (office chairs on five-star casters, desks with metal frames and monitors,
+cushioned sofas, leafy plants, ping-pong, billiards and foosball tables), and avatars have human proportions with eyes,
+brows, nose and lips. Managers' and C-level offices get **executive chairs** (high-back padded leather on a chrome base
+— black for C-level, cognac for managers) and leather guest chairs; this is derived from the floor plan, so edited
+layouts keep it.
+
+**Two views** — a light, illustrated **2D** top-down view (default; plain Canvas 2D, no WebGL download) and the full
+**3D** view (Three.js + Rapier, loaded only when picked). Switch any time with the **View** pill or in Settings —
+position, chat and calls stay as they are. Both views share the same game logic and collision sizes.
 
 **Spatial audio & video (LiveKit)**
 - **Areas** — rooms (glass walls + door), open areas (lounge, pantry, rooftop) and every desk. Everyone in the same
@@ -56,16 +68,25 @@ The UI is available in **English and Indonesian** (switch on the sign-in screen 
 - Data is stored in `server/data/db.json` and **backed up automatically** (on start and every 6 hours, last 20 kept in `server/data/backups/`).
 
 **Performance** — remote avatars use cheap blob shadows and switch to a low-detail model beyond ~14 m; the directory is
-throttled to once per second. Measured with 50 simulated users walking around: **855 draw calls / 54k triangles per
+throttled to once per second. Measured with 50 simulated users walking around (before the detailed furniture below): **855 draw calls / 54k triangles per
 frame** (down from 3,671 / 748k), **~27 KB/s** downstream per client, and ~5% CPU on the server. An automatic
-low-quality mode kicks in when the frame rate drops. Touch joystick on mobile.
+low-quality mode kicks in when the frame rate drops. Touch joystick on mobile. The 2D view loads ~280 KB (gzip)
+instead of ~1.5 MB and draws the static floor plan once into a cached layer, redrawing only avatars and live items
+each frame.
+
+The detailed 3D furniture stays cheap: static pieces are merged per material into a few meshes, slender parts get
+plain boxes instead of bevels, segment counts scale with size, and furniture doesn't cast real-time shadows (avatar
+and wall shadows still fall on it). Once merged, the thousands of hidden source pieces are skipped by the per-frame
+matrix update (it cost ~2–3 ms per pass while walking). Walking through the busy workspace on an Apple M1 runs at
+~58–60 FPS, on par with the old box furniture, for ~10 KB more download (gzip).
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | WASD / arrows | Walk (relative to camera) · **Shift** to run |
-| Drag / Q·E · scroll | Rotate camera · zoom (close = third-person, far = top-down) |
+| Drag / Q·E · scroll | 3D: rotate camera · zoom (close = third-person, far = top-down) |
+| Scroll · pinch | 2D: zoom (W always walks up the screen); zoomed all the way out the whole floor fits on screen |
 | C · F | Sit / stand · open, close or knock on a door, or play an arcade game |
 | Space | Push-to-talk (when enabled) |
 | 1 · 2 · 3 | Wave · thumbs up · dance |
@@ -126,15 +147,24 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 - `server/src/server.test.ts` — starts a real server and checks auth, invite codes, area-scoped chat, DMs, door locks,
   whiteboard privacy, floors & stage, passwords, guest links, bookings, uploads, reactions, search, screens.
 - `server/src/ratelimit.test.ts` — sign-in attempt limiter.
+- `server/src/migrate.test.ts` — one-time data migrations (older saved floor plans get the default decorations once).
+- `client/src/controller.test.ts` — shared avatar logic (input, sitting, doors, focus desks, zones, position sync).
+- `client/src/motion2d.test.ts` — 2D collision: walls, doors, furniture, sliding, starting inside an obstacle.
+- `client/src/world2d/*.test.ts` — 2D drawing, layer sizing (stays under the iOS canvas limit), labels, pinch zoom,
+  zoom-out that fits the whole floor (camera centres on the building), editor hit-testing.
+- `client/src/chairStyle.test.ts` — executive & guest chairs only in managers' / C-level offices.
 - `client/src/i18n.test.ts` — every UI string has an English translation.
-- `e2e/smoke.test.ts` — two users sign up, chat, take the elevator and go on stage in a real browser.
+- `e2e/smoke.test.ts` — two users sign up, chat, take the elevator, go on stage and switch 2D ↔ 3D in a real browser
+  (`npm run test:e2e` runs it in 2D, `npm run test:e2e:3d` in 3D).
 
 ## Project layout
 
 ```
-client/   Vite + React + React Three Fiber + Rapier + Zustand + LiveKit client
+client/   Vite + React + Zustand + LiveKit client; 2D view (Canvas 2D, client/src/world2d/) and lazy-loaded
+          3D view (React Three Fiber + Rapier); shared avatar logic in client/src/controller.ts;
+          3D furniture in client/src/Furniture.tsx (shape primitives in shapes3d.tsx), avatars in avatar/Character.tsx
 server/   Node + ws (game state, chat, accounts, files) + LiveKit tokens; data in server/data/
-shared/   Floor-plan model & area/stage rules, used by both server and client
+shared/   Floor-plan model, area/stage rules & furniture collider sizes, used by both server and client
 e2e/      Browser end-to-end tests
 ```
 

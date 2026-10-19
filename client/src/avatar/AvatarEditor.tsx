@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from "react";
-import { Canvas } from "@react-three/fiber";
-import { ContactShadows, OrbitControls } from "@react-three/drei";
-import { Character } from "./Character";
+import { Suspense, lazy, useState, type ReactNode } from "react";
 import { ANIM } from "../anims";
+import { useGraphics } from "../graphics";
+import { Preview2D } from "./Preview2D";
+import { LazyBoundary } from "../LazyBoundary";
 import {
   CLOTH_COLORS,
   HAIR_COLORS,
@@ -13,6 +13,9 @@ import {
   type AvatarConfig,
 } from "./config";
 import { t, useT } from "../i18n";
+import { DiceFiveIcon } from "../ui/icons";
+
+const Preview3D = lazy(() => import("./Preview3D"));
 
 const PREVIEW_ANIMS = [
   { label: "Diam", anim: ANIM.idle },
@@ -24,16 +27,18 @@ const PREVIEW_ANIMS = [
 function Preview({ config }: { config: AvatarConfig }) {
   useT();
   const [anim, setAnim] = useState<number>(ANIM.idle);
+  const view = useGraphics((s) => s.view);
   return (
     <div className="preview">
-      <Canvas shadows="percentage" camera={{ position: [0, 1.2, 4.2], fov: 30 }} dpr={[1, 2]}>
-        <color attach="background" args={["#efe6da"]} />
-        <hemisphereLight args={["#ffffff", "#c9b89e", 1.1]} />
-        <directionalLight position={[2, 4, 3]} intensity={2.2} castShadow />
-        <Character config={config} getAnim={() => anim} />
-        <ContactShadows opacity={0.35} blur={2.2} far={2} />
-        <OrbitControls target={[0, 0.95, 0]} enablePan={false} enableZoom={false} minPolarAngle={1.1} maxPolarAngle={1.7} />
-      </Canvas>
+      {view === "2d" ? (
+        <Preview2D config={config} anim={anim} />
+      ) : (
+        <LazyBoundary onError={() => useGraphics.getState().setView("2d")} fallback={null}>
+          <Suspense fallback={null}>
+            <Preview3D config={config} anim={anim} />
+          </Suspense>
+        </LazyBoundary>
+      )}
       <div className="preview-anims">
         {PREVIEW_ANIMS.map((a) => (
           <button key={a.label} type="button" className={anim === a.anim ? "chip active" : "chip"} onClick={() => setAnim(a.anim)}>
@@ -41,7 +46,7 @@ function Preview({ config }: { config: AvatarConfig }) {
           </button>
         ))}
       </div>
-      <p className="hint">{t("Geser untuk memutar")}</p>
+      {view === "3d" && <p className="hint">{t("Geser untuk memutar")}</p>}
     </div>
   );
 }
@@ -144,7 +149,7 @@ export function AvatarEditor({ value: c, onChange, header, footer }: Props) {
         </div>
         <div className="editor-footer">
           <button type="button" className="secondary" onClick={() => onChange(randomAvatar())}>
-            🎲 {t("Acak")}
+            <DiceFiveIcon /> {t("Acak")}
           </button>
           {footer}
         </div>

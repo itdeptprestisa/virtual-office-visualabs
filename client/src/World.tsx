@@ -2,13 +2,48 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import { Html, Line } from "@react-three/drei";
-import { Color, DoubleSide, type Mesh } from "three";
-import { WORLD, angleOf, inZone, type Door, type Item, type Zone } from "../../shared/layout";
+import { BufferGeometry, CanvasTexture, CircleGeometry, Color, DoubleSide, Float32BufferAttribute, PlaneGeometry, RepeatWrapping, SRGBColorSpace, type Mesh } from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { WORLD, angleOf, zoneDepth, zoneIn, type Door, type Room, type Side, type Item, type Zone } from "../../shared/layout";
 import { useNet, type DeskState } from "./net";
 import { COLLIDERS, FOOTPRINT, Furniture } from "./Furniture";
 import { moveItem, snap, useEditor } from "./editor";
 import { pointerLock } from "./input";
-import { locale, t, useT } from "./i18n";
+import { bookingLabel } from "./bookingLabel";
+import { Batched } from "./batch";
+import { chairStyles, type ChairStyle } from "./chairStyle";
+import { locale, place, t, useLang, useT } from "./i18n";
+import { CalendarBlankIcon, ChairIcon, LockSimpleIcon } from "./ui/icons";
+import { PAL } from "./world2d/palette";
+
+/** Tekstur lantai papan kayu (digambar sekali di kanvas, diulang di seluruh lantai). */
+function woodTexture() {
+  const c = document.createElement("canvas");
+  c.width = 512;
+  c.height = 512;
+  const g = c.getContext("2d")!;
+  const shades = ["#dcc9aa", "#d6c2a1", "#e0ceb0", "#d3bd9b"];
+  for (let row = 0; row < 8; row++) {
+    const y = row * 64;
+    let x = -(row % 2) * 96; // sambungan papan selang-seling
+    for (let k = 0; x < 512; k++) {
+      const w = 160 + ((row * 7 + k * 13) % 4) * 32;
+      g.fillStyle = shades[(row + k) % shades.length];
+      g.fillRect(x, y, w, 64);
+      g.fillStyle = PAL.floorLine;
+      g.fillRect(x, y, 2, 64);
+      x += w;
+    }
+    g.fillStyle = PAL.floorLine;
+    g.fillRect(0, y, 512, 2);
+  }
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  t.wrapS = t.wrapT = RepeatWrapping;
+  t.anisotropy = 4;
+  t.repeat.set((W * 2) / 3, (D * 2) / 3); // satu ubin tekstur = 3 m (papan ±0,37 m)
+  return t;
+}
 
 // Kantor digambar dari data denah (useNet.layout); bentuk turunan (area, pintu, dinding) dari useNet.derived.
 
@@ -17,17 +52,21 @@ const W = (maxX - minX) / 2; // setengah lebar & kedalaman gedung
 const D = (maxZ - minZ) / 2;
 const CX = (minX + maxX) / 2; // titik tengah gedung (tidak di 0,0: gedung diperluas ke utara)
 const CZ = (minZ + maxZ) / 2;
-const FLOOR = "#ead8bf";
-const WALL = "#f6f1ea";
-const WALL_TRIM = "#d9cbb6";
+// Palet B (sama dengan mode 2D): lantai kayu terang berpapan, dinding abu muda, karpet abu di area kerja.
+const WALL = PAL.wallFace;
+const WALL_TRIM = PAL.wallEdge;
 const LOCKED_COLOR = "#e5484d";
-const MARK_Y = 0.015;
+// Ketinggian lapisan di atas lantai. Ruangan bersarang (manager/rapat di dalam divisi, meja di dalam divisi) diberi
+// lapisan sedikit lebih tinggi dari induknya supaya dua bidang tidak berimpit (z-fighting → lantai berkedip).
+const MARK_Y = 0.022; // garis penanda zona, di atas semua isian
+const roomFloorY = (depth: number) => 0.004 + Math.min(depth, 2) * 0.003;
+const zoneFillY = (depth: number) => 0.013 + Math.min(depth, 2) * 0.003;
 
 type V3 = [number, number, number];
 
 function Block({ size, position, color, blocksCamera }: { size: V3; position: V3; color: string; blocksCamera?: boolean }) {
   return (
-    <RigidBody type="fixed" colliders="cuboid" position={position} userData={{ blocksCamera }}>
+    <RigidBody type="fixed" colliders="cuboid" includeInvisible position={position} userData={{ blocksCamera }}>
       <mesh castShadow receiveShadow>
         <boxGeometry args={size} />
         <meshStandardMaterial color={color} roughness={0.85} />
@@ -37,6 +76,8 @@ function Block({ size, position, color, blocksCamera }: { size: V3; position: V3
 }
 
 function Shell() {
+  const wood = useMemo(woodTexture, []);
+  useEffect(() => () => wood.dispose(), [wood]);
   return (
     <>
       <RigidBody type="fixed" colliders={false}>
@@ -44,7 +85,7 @@ function Shell() {
       </RigidBody>
       <mesh rotation-x={-Math.PI / 2} position={[CX, 0, CZ]} receiveShadow>
         <planeGeometry args={[W * 2, D * 2]} />
-        <meshStandardMaterial color={FLOOR} roughness={0.9} />
+        <meshStandardMaterial map={wood} roughness={0.85} />
       </mesh>
       {/* utara & samping tinggi (menghalangi kamera), selatan rendah */}
       <Block size={[W * 2, WALL_H, 0.3]} position={[CX, WALL_H / 2, minZ]} color={WALL} blocksCamera />
@@ -68,25 +109,27 @@ const useFloor = () => useNet((s) => s.layout?.floors.find((f) => f.id === s.flo
 
 function RoomFloors() {
   const rooms = useFloor()?.rooms ?? EMPTY;
+  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
   return (
-    <>
+    <Batched version={zones}>
       {rooms.map((r) => {
-        const tint = "#" + new Color(r.color).lerp(new Color("#ffffff"), 0.72).getHexString();
+        // area kerja (suara jarak dekat, mis. divisi) = karpet abu; ruangan lain = warna ruangan dipudarkan
+        const tint = r.audio === "near" ? PAL.carpet : "#" + new Color(r.color).lerp(new Color("#ffffff"), 0.8).getHexString();
         return (
-          <mesh key={r.id} rotation-x={-Math.PI / 2} position={[(r.x[0] + r.x[1]) / 2, 0.005, (r.z[0] + r.z[1]) / 2]} receiveShadow>
+          <mesh key={r.id} rotation-x={-Math.PI / 2} position={[(r.x[0] + r.x[1]) / 2, roomFloorY(depthOf(zones, `room:${r.id}`)), (r.z[0] + r.z[1]) / 2]} receiveShadow>
             <planeGeometry args={[r.x[1] - r.x[0], r.z[1] - r.z[0]]} />
             <meshStandardMaterial color={tint} roughness={1} />
           </mesh>
         );
       })}
-    </>
+    </Batched>
   );
 }
 
 function GlassWalls() {
   const walls = useNet((s) => s.derived?.walls ?? EMPTY);
   return (
-    <>
+    <Batched version={walls}>
       {walls.map((w) => {
         const len = w.a[1] - w.a[0];
         const mid = (w.a[0] + w.a[1]) / 2;
@@ -98,7 +141,7 @@ function GlassWalls() {
             : [[w.c, 1.3, w.a[0]], [w.c, 1.3, w.a[1]]];
         return (
           <group key={`${w.orient}:${w.c}:${w.a[0]}:${w.a[1]}`}>
-            <RigidBody type="fixed" colliders="cuboid" position={pos}>
+            <RigidBody type="fixed" colliders="cuboid" includeInvisible position={pos}>
               <mesh>
                 <boxGeometry args={size} />
                 <meshStandardMaterial color="#bfe3ff" transparent opacity={0.22} roughness={0.1} depthWrite={false} />
@@ -113,7 +156,7 @@ function GlassWalls() {
           </group>
         );
       })}
-    </>
+    </Batched>
   );
 }
 
@@ -150,10 +193,18 @@ function DoorView({ door }: { door: Door }) {
       {leaf(-1)}
       {leaf(1)}
       {(locked || booking) && (
-        <Html position={[0, 2.85, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+        <Html position={[0, 3.8, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
           <div className="door-labels">
-            {locked && <div className="desk-label locked">🔒 {t("Terkunci")}</div>}
-            {booking && <div className={booking.now ? "desk-label booked" : "desk-label"}>{booking.text}</div>}
+            {locked && (
+              <div className="desk-label locked">
+                <LockSimpleIcon /> {t("Terkunci")}
+              </div>
+            )}
+            {booking && (
+              <div className={booking.now ? "desk-label booked" : "desk-label"}>
+                <CalendarBlankIcon /> {booking.text}
+              </div>
+            )}
           </div>
         </Html>
       )}
@@ -166,8 +217,6 @@ function DoorView({ door }: { door: Door }) {
   );
 }
 
-const hhmm = (ts: number) => new Date(ts).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
-
 /** Label jadwal di atas pintu: yang sedang berlangsung, atau booking berikutnya hari ini. Diperbarui tiap 30 detik. */
 function useBookingLabel(roomId: string) {
   useT();
@@ -177,11 +226,7 @@ function useBookingLabel(roomId: string) {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  const mine = bookings.filter((b) => b.room === roomId && b.end > now);
-  const current = mine.find((b) => b.start <= now);
-  if (current) return { now: true, text: `📅 ${current.title} · ${t("s/d")} ${hhmm(current.end)}` };
-  const next = mine.find((b) => new Date(b.start).toDateString() === new Date(now).toDateString());
-  return next ? { now: false, text: `📅 ${t("Berikutnya")} ${hhmm(next.start)} · ${next.title}` } : null;
+  return bookingLabel(roomId, bookings, now);
 }
 
 function Doors() {
@@ -195,9 +240,112 @@ function Doors() {
   );
 }
 
+// ---------- papan nama ruangan: di atas pintu (terbaca dari luar & dalam) + tulisan besar di lantai ----------
+
+const SIGN_H = 0.75;
+const SIGN_Y = 3.05;
+const OUTWARD: Record<Side, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
+
+/** Tekstur teks; `bg` = warna papan (null = transparan, untuk tulisan lantai). Lebar mengikuti panjang teks. */
+function useTextTexture(text: string, color: string, bg: boolean) {
+  const out = useMemo(() => {
+    const scale = 4;
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    const font = `700 ${30 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    ctx.font = font;
+    const h = 56 * scale;
+    const w = Math.max(140 * scale, Math.ceil(ctx.measureText(text).width) + 40 * scale);
+    ctx.canvas.width = w;
+    ctx.canvas.height = h;
+    const dark = "#" + new Color(color).lerp(new Color("#1b1d26"), bg ? 0.45 : 0.3).getHexString();
+    if (bg) {
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, w, h, 10 * scale);
+      ctx.fill();
+    }
+    ctx.font = font;
+    ctx.fillStyle = bg ? "#ffffff" : dark;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, w / 2, h / 2 + 2 * scale);
+    const tex = new CanvasTexture(ctx.canvas);
+    tex.colorSpace = SRGBColorSpace;
+    tex.anisotropy = 8;
+    return { tex, aspect: w / h };
+  }, [text, color, bg]);
+  useEffect(() => () => out.tex.dispose(), [out]);
+  return out;
+}
+
+function RoomSign({ room }: { room: Room }) {
+  useT();
+  const name = place(room.name);
+  const sign = useTextTexture(name, room.color, true);
+  const floorText = useTextTexture(name, room.color, false);
+  const { side, center } = room.door;
+  const across = side === "n" ? room.z[0] : side === "s" ? room.z[1] : side === "w" ? room.x[0] : room.x[1];
+  const pos: V3 = side === "n" || side === "s" ? [center, 0, across] : [across, 0, center];
+  const w = SIGN_H * sign.aspect;
+  // Tulisan besar di lantai, di dalam ruangan dekat pintu — selalu menghadap utara (arah pandang kamera bawaan)
+  // supaya terbaca jelas dari atas. Ukurannya mengikuti lebar ruangan.
+  const horiz = side === "n" || side === "s";
+  const roomW = room.x[1] - room.x[0];
+  const fh = Math.min(1.6, Math.max(0.5, roomW / 12));
+  const fw = Math.min(fh * floorText.aspect, roomW - 1);
+  const inward: [number, number] = side === "s" ? [0, -1] : side === "n" ? [0, 1] : side === "e" ? [-1, 0] : [1, 0];
+  const depth = horiz ? fw / floorText.aspect : fw;
+  const off = 0.45 + depth / 2;
+  const face = (
+    <>
+      <planeGeometry args={[w, SIGN_H]} />
+      <meshBasicMaterial map={sign.tex} transparent toneMapped={false} />
+    </>
+  );
+  return (
+    <>
+      <group position={pos} rotation-y={OUTWARD[side]}>
+        <group position-y={SIGN_Y}>
+          <mesh position={[0, 0, 0.06]}>{face}</mesh>
+          <mesh position={[0, 0, -0.06]} rotation-y={Math.PI}>
+            {face}
+          </mesh>
+          <mesh>
+            <boxGeometry args={[w + 0.06, SIGN_H + 0.06, 0.1]} />
+            <meshStandardMaterial color={WALL_TRIM} />
+          </mesh>
+        </group>
+      </group>
+      <mesh rotation-x={-Math.PI / 2} position={[pos[0] + inward[0] * off, 0.02, pos[2] + inward[1] * off]}>
+        <planeGeometry args={[fw, fw / floorText.aspect]} />
+        <meshBasicMaterial map={floorText.tex} transparent opacity={0.92} depthWrite={false} toneMapped={false} />
+      </mesh>
+    </>
+  );
+}
+
+function RoomSigns() {
+  const rooms = useFloor()?.rooms ?? EMPTY;
+  const lang = useLang((s) => s.lang); // lebar papan ikut panjang teks → gabung ulang saat bahasa diganti
+  return (
+    <Batched key={lang} version={rooms}>
+      {rooms.map((r) => (
+        <RoomSign key={r.id} room={r} />
+      ))}
+    </Batched>
+  );
+}
+
 // ---------- penanda area di lantai ----------
 
+const depthOf = (zones: Zone[], id: string) => {
+  const zn = zones.find((z) => z.id === id);
+  return zn ? zoneDepth(zones, zn) : 0;
+};
+
 function ZoneMarker({ zone, active, color = zone.color }: { zone: Zone; active: boolean; color?: string }) {
+  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
+  const fillY = zoneFillY(zoneDepth(zones, zone));
   const outline = useMemo(() => {
     if (zone.shape === "rect") {
       const [x0, x1] = zone.x;
@@ -214,12 +362,12 @@ function ZoneMarker({ zone, active, color = zone.color }: { zone: Zone; active: 
   return (
     <group>
       {zone.shape === "rect" ? (
-        <mesh rotation-x={-Math.PI / 2} position={[(zone.x[0] + zone.x[1]) / 2, MARK_Y, (zone.z[0] + zone.z[1]) / 2]}>
+        <mesh rotation-x={-Math.PI / 2} position={[(zone.x[0] + zone.x[1]) / 2, fillY, (zone.z[0] + zone.z[1]) / 2]}>
           <planeGeometry args={[zone.x[1] - zone.x[0], zone.z[1] - zone.z[0]]} />
           {fill}
         </mesh>
       ) : (
-        <mesh rotation-x={-Math.PI / 2} position={[zone.cx, MARK_Y, zone.cz]}>
+        <mesh rotation-x={-Math.PI / 2} position={[zone.cx, fillY, zone.cz]}>
           <circleGeometry args={[zone.r, 64]} />
           {fill}
         </mesh>
@@ -231,15 +379,68 @@ function ZoneMarker({ zone, active, color = zone.color }: { zone: Zone; active: 
 
 const zoneKey = (z: Zone) => `${z.id}:${z.shape === "rect" ? [...z.x, ...z.z].join() : [z.cx, z.cz, z.r].join()}`;
 
+/** Semua penanda zona yang tidak aktif digabung per warna: satu isian + satu garis putus-putus (bukan 2 objek per zona). */
+function QuietZoneMarks({ zones, colorOf }: { zones: Zone[]; colorOf: (z: Zone) => string }) {
+  const all = useNet((s) => s.derived?.zones ?? EMPTY);
+  const groups = useMemo(() => {
+    const by = new Map<string, { fills: BufferGeometry[]; lines: number[] }>();
+    for (const zn of zones) {
+      const color = colorOf(zn);
+      let g = by.get(color);
+      if (!g) by.set(color, (g = { fills: [], lines: [] }));
+      const fy = zoneFillY(zoneDepth(all, zn));
+      const fill =
+        zn.shape === "rect"
+          ? new PlaneGeometry(zn.x[1] - zn.x[0], zn.z[1] - zn.z[0]).rotateX(-Math.PI / 2).translate((zn.x[0] + zn.x[1]) / 2, fy, (zn.z[0] + zn.z[1]) / 2)
+          : new CircleGeometry(zn.r, 48).rotateX(-Math.PI / 2).translate(zn.cx, fy, zn.cz);
+      g.fills.push(fill.toNonIndexed());
+      fill.dispose();
+      const pts: [number, number][] =
+        zn.shape === "rect"
+          ? [[zn.x[0], zn.z[0]], [zn.x[1], zn.z[0]], [zn.x[1], zn.z[1]], [zn.x[0], zn.z[1]], [zn.x[0], zn.z[0]]]
+          : Array.from({ length: 73 }, (_, i) => [zn.cx + Math.cos((i / 72) * Math.PI * 2) * zn.r, zn.cz + Math.sin((i / 72) * Math.PI * 2) * zn.r]);
+      for (let i = 1; i < pts.length; i++) g.lines.push(pts[i - 1][0], MARK_Y, pts[i - 1][1], pts[i][0], MARK_Y, pts[i][1]);
+    }
+    return [...by].map(([color, g]) => {
+      const fill = mergeGeometries(g.fills)!;
+      g.fills.forEach((f) => f.dispose());
+      const line = new BufferGeometry().setAttribute("position", new Float32BufferAttribute(g.lines, 3));
+      return { color, fill, line };
+    });
+  }, [zones, colorOf, all]);
+  useEffect(() => () => groups.forEach((g) => (g.fill.dispose(), g.line.dispose())), [groups]);
+  return (
+    <>
+      {groups.map((g) => (
+        <group key={g.color}>
+          <mesh geometry={g.fill}>
+            <meshBasicMaterial color={g.color} transparent opacity={0.06} depthWrite={false} toneMapped={false} />
+          </mesh>
+          <lineSegments geometry={g.line} ref={(l) => l?.computeLineDistances()}>
+            <lineDashedMaterial color={g.color} dashSize={0.35} gapSize={0.22} transparent opacity={0.75} toneMapped={false} />
+          </lineSegments>
+        </group>
+      ))}
+    </>
+  );
+}
+
 function ZoneMarkers() {
   const zones = useNet((s) => s.derived?.zones ?? EMPTY);
   const current = useNet((s) => s.zoneId);
   const desks = useNet((s) => s.desks);
+  // Kunci warna meja (merah saat mode fokus) — penanda digabung ulang hanya bila ini berubah.
+  const lockedKey = Object.entries(desks).filter(([, d]) => d.locked).map(([id]) => id).sort().join();
+  const colorOf = useMemo(() => {
+    const locked = new Set(lockedKey.split(","));
+    return (zn: Zone) => (locked.has(zn.id) ? LOCKED_COLOR : zn.color);
+  }, [lockedKey]);
+  const quiet = useMemo(() => zones.filter((zn) => zn.id !== current), [zones, current]);
+  const active = zones.find((zn) => zn.id === current);
   return (
     <>
-      {zones.map((zn) => (
-        <ZoneMarker key={zoneKey(zn)} zone={zn} active={zn.id === current} color={desks[zn.id]?.locked ? LOCKED_COLOR : zn.color} />
-      ))}
+      <QuietZoneMarks zones={quiet} colorOf={colorOf} />
+      {active && <ZoneMarker key={zoneKey(active)} zone={active} active color={colorOf(active)} />}
     </>
   );
 }
@@ -270,7 +471,14 @@ function DeskOverlay({ zone, desk }: { zone: Extract<Zone, { shape: "rect" }>; d
       {/* di atas monitor (sisi belakang meja), supaya tidak menumpuk dengan nama orang yang duduk */}
       <Html position={[cx, 1.45, zone.z[0] + 0.2]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className={desk.locked ? "desk-label locked" : desk.online ? "desk-label" : "desk-label offline"}>
-          {desk.locked ? `🔒 ${t("Fokus")}` : "🪑"} {desk.ownerName}
+          {desk.locked ? (
+            <>
+              <LockSimpleIcon /> {t("Fokus")}
+            </>
+          ) : (
+            <ChairIcon />
+          )}{" "}
+          {desk.ownerName}
         </div>
       </Html>
     </group>
@@ -292,7 +500,7 @@ function DeskOverlays() {
 
 // ---------- furnitur (+ interaksi editor) ----------
 
-function ItemNode({ item, room, zone }: { item: Item; room: string | null; zone: string | null }) {
+function ItemNode({ item, room, zone, chair }: { item: Item; room: string | null; zone: string | null; chair?: ChairStyle }) {
   const editing = useEditor((s) => s.active);
   const selected = useEditor((s) => s.selected === item.id);
   const drag = useEditor((s) => (s.drag?.id === item.id ? s.drag : null));
@@ -325,8 +533,8 @@ function ItemNode({ item, room, zone }: { item: Item; room: string | null; zone:
           <CuboidCollider args={col.half} position={col.pos} />
         </RigidBody>
       )}
-      <group position={[x, 0, z]} rotation-y={angle} onPointerDown={editing ? onDown : undefined}>
-        <Furniture type={item.type} room={room} zone={zone} itemId={item.id} />
+      <group position={[x, 0, z]} rotation-y={angle} userData={{ furniture: item.type }} onPointerDown={editing ? onDown : undefined}>
+        <Furniture type={item.type} room={room} zone={zone} itemId={item.id} chair={chair} />
       </group>
       {editing && selected && (
         <mesh rotation-x={-Math.PI / 2} position={[x, 0.03, z]}>
@@ -357,17 +565,32 @@ function DragPlane() {
   );
 }
 
+const LIVE: Item["type"][] = ["screen", "whiteboard"]; // bermaterial dinamis: tidak ikut digabung
+
 function Items() {
   const floor = useFloor();
-  const zones = useNet((s) => s.derived?.zones ?? EMPTY);
-  // Layar & whiteboard milik zona (ruangan/panggung) tempat mereka berada.
-  const zoneOf = (it: Item) => zones.find((z) => z.kind !== "desk" && inZone(z, it.x, it.z)) ?? null;
+  const derived = useNet((s) => s.derived);
+  const editing = useEditor((s) => s.active);
+  const items = floor?.items ?? EMPTY;
+  const chairs = useMemo(() => (floor ? chairStyles(floor) : new Map<string, ChairStyle>()), [floor]);
+  // Layar & whiteboard milik zona terdalam (ruang rapat/panggung) tempat mereka berada.
+  const zoneOf = (it: Item) => (derived ? zoneIn(derived, it.x, it.z, true) : null);
   return (
     <>
-      {(floor?.items ?? EMPTY).map((it) => {
-        const z = it.type === "screen" || it.type === "whiteboard" ? zoneOf(it) : null;
-        return <ItemNode key={it.id} item={it} zone={z?.id ?? null} room={z?.kind === "room" ? z.refId : null} />;
-      })}
+      {/* Saat editor aktif furnitur dirender satu per satu supaya bisa diseret. */}
+      <Batched enabled={!editing} version={items}>
+        {items
+          .filter((it) => !LIVE.includes(it.type))
+          .map((it) => (
+            <ItemNode key={it.id} item={it} zone={null} room={null} chair={chairs.get(it.id)} />
+          ))}
+      </Batched>
+      {items
+        .filter((it) => LIVE.includes(it.type))
+        .map((it) => {
+          const z = zoneOf(it);
+          return <ItemNode key={it.id} item={it} zone={z?.id ?? null} room={z?.kind === "room" ? z.refId : null} />;
+        })}
     </>
   );
 }
@@ -382,6 +605,7 @@ export function World() {
           <RoomFloors />
           <GlassWalls />
           <Doors />
+          <RoomSigns />
           <Items />
           <ZoneMarkers />
           <DeskOverlays />

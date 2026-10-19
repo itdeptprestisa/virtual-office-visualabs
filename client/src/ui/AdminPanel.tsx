@@ -2,6 +2,7 @@ import { useState } from "react";
 import { resetLayout, sendAdmin, showNotice, useNet } from "../net";
 import { useEditor } from "../editor";
 import { locale, t, useT } from "../i18n";
+import { ArrowCounterClockwiseIcon, CheckIcon, KeyIcon, LinkSimpleIcon, PencilSimpleIcon, ProhibitIcon, SignOutIcon, TrashIcon, WrenchIcon } from "./icons";
 
 const NO_LINKS: never[] = [];
 const guestUrl = (token: string) => `${location.origin}${location.pathname}?guest=${encodeURIComponent(token)}`;
@@ -48,13 +49,13 @@ function GuestLinks() {
                 title={t("Salin link")}
                 onClick={() => {
                   navigator.clipboard?.writeText(guestUrl(g.token));
-                  showNotice(`🔗 ${t("Link tamu disalin")}`);
+                  showNotice(t("Link tamu disalin"), "link");
                 }}
               >
-                🔗
+                <LinkSimpleIcon />
               </button>
               <button title={t("Cabut link")} onClick={() => sendAdmin({ action: "guest_revoke", token: g.token })}>
-                🗑️
+                <TrashIcon />
               </button>
             </div>
           </li>
@@ -72,8 +73,10 @@ export function TempPasswordModal() {
   return (
     <div className="overlay modal">
       <div className="card">
-        <h2>🔑 {t("Password sementara")}</h2>
-        <p>{t("Berikan ke @{username} lewat jalur pribadi. Minta dia menggantinya di ⚙️ Setelan setelah masuk.", { username: temp.username })}</p>
+        <h2>
+          <KeyIcon /> {t("Password sementara")}
+        </h2>
+        <p>{t("Berikan ke @{username} lewat jalur pribadi. Minta dia menggantinya di Setelan setelah masuk.", { username: temp.username })}</p>
         <code className="big">{temp.password}</code>
         <div className="editor-footer">
           <button className="secondary" onClick={() => navigator.clipboard?.writeText(temp.password)}>
@@ -99,7 +102,9 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
   return (
     <aside className="side-panel wide">
       <div className="side-head">
-        <b>🛠️ Admin</b>
+        <b>
+          <WrenchIcon /> Admin
+        </b>
         <button className="x" onClick={onClose} aria-label={t("Tutup")}>
           ×
         </button>
@@ -109,7 +114,15 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
         <h4>{t("Denah kantor")}</h4>
         <div className="row-actions">
           <button className={editing ? "primary small" : "secondary small"} onClick={() => useEditor.setState({ active: !editing, selected: null })}>
-            {editing ? `✓ ${t("Selesai mengedit")}` : `✏️ ${t("Edit denah")}`}
+            {editing ? (
+              <>
+                <CheckIcon /> {t("Selesai mengedit")}
+              </>
+            ) : (
+              <>
+                <PencilSimpleIcon /> {t("Edit denah")}
+              </>
+            )}
           </button>
           <button className="secondary small" onClick={() => confirm(t("Kembalikan denah ke bawaan? Furnitur & ruangan yang diubah akan hilang.")) && resetLayout()}>
             {t("Reset ke bawaan")}
@@ -174,21 +187,21 @@ export function AdminPanel({ onClose }: { onClose: () => void }) {
                       title={t("Reset password")}
                       onClick={() => confirm(t("Reset password {name}? Semua sesinya akan dikeluarkan.", { name: u.name })) && sendAdmin({ action: "reset_password", userId: u.id })}
                     >
-                      🔑
+                      <KeyIcon />
                     </button>
                   )}
                   {u.online && (
                     <button title={t("Keluarkan dari kantor")} onClick={() => sendAdmin({ action: "kick", userId: u.id })}>
-                      ⏏️
+                      <SignOutIcon />
                     </button>
                   )}
                   {u.disabled ? (
                     <button title={t("Aktifkan akun")} onClick={() => sendAdmin({ action: "enable", userId: u.id })}>
-                      ♻️
+                      <ArrowCounterClockwiseIcon />
                     </button>
                   ) : (
                     <button title={t("Nonaktifkan akun")} onClick={() => confirm(t("Nonaktifkan akun {name}?", { name: u.name })) && sendAdmin({ action: "disable", userId: u.id })}>
-                      🚫
+                      <ProhibitIcon />
                     </button>
                   )}
                 </div>

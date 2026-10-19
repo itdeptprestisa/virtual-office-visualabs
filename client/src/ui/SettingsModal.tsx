@@ -3,7 +3,10 @@ import { logout, sendPassword, sendSettings, showNotice, useNet } from "../net";
 import { notifyPermission, requestNotifyPermission, setSoundsEnabled, soundsEnabled } from "../notify";
 import { chooseDevice, listDevices, setNoiseSuppression, setPushToTalk, usePrefs } from "../media";
 import { locale, useT } from "../i18n";
+import { CheckIcon, GearSixIcon } from "./icons";
 import { LangSwitch } from "./AuthScreen";
+import { useGraphics, type Quality, type View } from "../graphics";
+import { switchView } from "../actions";
 
 type Devices = Awaited<ReturnType<typeof listDevices>>;
 
@@ -28,6 +31,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const t = useT();
   const me = useNet((s) => s.me)!;
   const guest = me.role === "guest";
+  const view = useGraphics((s) => s.view);
+  const quality = useGraphics((s) => s.quality);
+  const setQuality = useGraphics((s) => s.setQuality);
   const [name, setName] = useState(me.name);
   const [ical, setIcal] = useState(me.ical ?? "");
   const [perm, setPerm] = useState(notifyPermission());
@@ -58,7 +64,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     <div className="overlay modal" onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <div className="card settings">
         <div className="auth-head">
-          <h2>⚙️ {t("Setelan")}</h2>
+          <h2>
+          <GearSixIcon /> {t("Setelan")}
+        </h2>
           <LangSwitch />
         </div>
         <p className="muted small">
@@ -88,6 +96,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <span className="muted small">
                 {t("Google Calendar → Setelan → pilih kalender → Alamat rahasia dalam format iCal. Selama ada acara, statusmu otomatis jadi Rapat. Judul acara tidak ditampilkan ke orang lain.")}
               </span>
+            </label>
+          )}
+        </section>
+
+        <section>
+          <h4>{t("Tampilan")}</h4>
+          <label className="setting-row">
+            <span>{t("Mode")}</span>
+            <select value={view} onChange={(e) => switchView(e.target.value as View)}>
+              <option value="2d">2D</option>
+              <option value="3d">3D</option>
+            </select>
+          </label>
+          {view === "3d" && (
+            <label className="setting-row">
+              <span>{t("Kualitas 3D")}</span>
+              <select value={quality} onChange={(e) => setQuality(e.target.value as Quality, true)}>
+                <option value="high">{t("Tinggi")}</option>
+                <option value="low">{t("Ringan")}</option>
+                <option value="flat">2.5D</option>
+              </select>
             </label>
           )}
         </section>
@@ -137,7 +166,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <div className="setting-row">
             <span>{t("Notifikasi desktop (saat tab tidak dibuka)")}</span>
             {perm === "granted" ? (
-              <span className="muted">{t("Aktif")} ✓</span>
+              <span className="muted">
+                {t("Aktif")} <CheckIcon />
+              </span>
             ) : perm === "denied" ? (
               <span className="muted small">{t("Diblokir — izinkan dari setelan browser")}</span>
             ) : (

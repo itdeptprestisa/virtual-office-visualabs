@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ITEM_LABELS, ITEM_TYPES, type Area, type Room, type Side } from "../../../shared/layout";
+import { AUDIO_MODES, ITEM_LABELS, ITEM_TYPES, type Area, type Audio, type Room, type Side } from "../../../shared/layout";
 import {
   addArea,
   addFloor,
@@ -17,6 +17,8 @@ import {
 } from "../editor";
 import { changeFloor, selfPos, useNet } from "../net";
 import { place, t, useT } from "../i18n";
+import { PencilSimpleIcon } from "./icons";
+import { teleportTo } from "../actions";
 
 const here = (): [number, number] => {
   const p = selfPos.p;
@@ -25,6 +27,21 @@ const here = (): [number, number] => {
 
 function Num({ value, onChange, step = 0.25 }: { value: number; onChange: (v: number) => void; step?: number }) {
   return <input type="number" step={step} value={Math.round(value * 100) / 100} onChange={(e) => e.target.value !== "" && onChange(Number(e.target.value))} />;
+}
+
+const AUDIO_LABELS: Record<Audio, string> = { full: "penuh", near: "jarak dekat", mute: "senyap" };
+
+/** Pilihan aturan suara ruangan/area (lihat Audio di shared/layout.ts). */
+function AudioSelect({ value, onChange }: { value: Audio | undefined; onChange: (v: Audio) => void }) {
+  return (
+    <select value={value ?? "full"} onChange={(e) => onChange(e.target.value as Audio)}>
+      {AUDIO_MODES.map((m) => (
+        <option key={m} value={m}>
+          {t(AUDIO_LABELS[m])}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function RoomEditor({ room }: { room: Room }) {
@@ -60,6 +77,8 @@ function RoomEditor({ room }: { room: Room }) {
         <Num value={room.door.width} onChange={(v) => set({ door: { ...room.door, width: v } })} />
         <span>{t("warna")}</span>
         <input type="color" value={room.color} onChange={(e) => set({ color: e.target.value })} />
+        <span>{t("suara")}</span>
+        <AudioSelect value={room.audio} onChange={(audio) => set({ audio })} />
       </div>
       <button className="link" onClick={() => confirm(t("Hapus {name}?", { name: place(room.name) })) && deleteRoom(room.id)}>
         {t("Hapus ruangan")}
@@ -104,6 +123,8 @@ function AreaEditor({ area }: { area: Area }) {
         )}
         <span>{t("warna")}</span>
         <input type="color" value={area.color} onChange={(e) => set({ color: e.target.value })} />
+        <span>{t("suara")}</span>
+        <AudioSelect value={area.audio} onChange={(audio) => set({ audio })} />
       </div>
       <label className="setting-row">
         <span>{t("Panggung (terdengar satu lantai)")}</span>
@@ -146,7 +167,9 @@ export function EditorPanel() {
   return (
     <aside className="editor-panel-float">
       <div className="side-head">
-        <b>✏️ {t("Edit denah")}</b>
+        <b>
+          <PencilSimpleIcon /> {t("Edit denah")}
+        </b>
         <button className="x" onClick={() => useEditor.setState({ active: false, selected: null })} aria-label={t("Selesai")}>
           ×
         </button>
@@ -166,7 +189,7 @@ export function EditorPanel() {
                 if (f.id === floorId) return;
                 const exit = derivedAll[f.id]?.elevators[0]?.exit ?? [0, 8];
                 changeFloor(f.id, [exit[0], 0, exit[1]]);
-                import("../Player").then((m) => m.teleportTo(exit[0], exit[1]));
+                teleportTo(exit[0], exit[1]);
                 useEditor.setState({ selected: null });
               }}
             >

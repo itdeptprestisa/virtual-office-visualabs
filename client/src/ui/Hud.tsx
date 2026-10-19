@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useGraphics } from "../Scene";
+import { useGraphics } from "../graphics";
 import {
   changeFloor,
   doorPrimaryAction,
@@ -13,11 +13,46 @@ import {
 } from "../net";
 import { enableAudio, toggleCam, toggleMic, toggleScreen, useMedia, usePrefs } from "../media";
 import { PROXIMITY } from "../zones";
-import { toggleSit } from "../Player";
+import { roomOf, zoneIn } from "../../../shared/layout";
+import { switchView, teleportTo, toggleSit } from "../actions";
 import { useWhiteboard } from "../whiteboard";
 import { openGame } from "../games";
 import { STATUS, StatusDot } from "./MemberPanel";
 import { place, t, useT } from "../i18n";
+import {
+  ArrowsClockwiseIcon,
+  CalendarBlankIcon,
+  ChairIcon,
+  ChalkboardSimpleIcon,
+  ChatCircleDotsIcon,
+  CirclesFourIcon,
+  CubeIcon,
+  DoorIcon,
+  ElevatorIcon,
+  FootprintsIcon,
+  GearSixIcon,
+  GlobeIcon,
+  HandPalmIcon,
+  JoystickIcon,
+  KeyboardIcon,
+  LockSimpleIcon,
+  LockSimpleOpenIcon,
+  MapPinIcon,
+  MapTrifoldIcon,
+  MicrophoneIcon,
+  MicrophoneSlashIcon,
+  MicrophoneStageIcon,
+  MonitorArrowUpIcon,
+  RecordIcon,
+  RulerIcon,
+  SpeakerSimpleHighIcon,
+  TShirtIcon,
+  UsersIcon,
+  VideoCameraIcon,
+  VideoCameraSlashIcon,
+  WrenchIcon,
+} from "./icons";
+import { NoticeIcon } from "./icons";
 
 export const totalUnread = (u: Partial<Record<string, number>>) => Object.values(u).reduce((a: number, b) => a + (b ?? 0), 0);
 
@@ -55,21 +90,28 @@ export function ContextActions() {
   const doorState = (id: string) => doors[id] ?? { open: true, locked: false };
   const inRoom = zone?.kind === "room";
   const onStage = !!zone?.stage;
-  // Layar presentasi di zona ini (ruangan/panggung) — untuk tombol 🌐 Layar.
+  // Layar presentasi di zona ini (ruangan/panggung) — untuk tombol Layar.
   const floorData = layout?.floors.find((f) => f.id === floor);
-  const screenHere = zone && zone.kind !== "desk" ? floorData?.items.find((i) => i.type === "screen" && derived.zones.find((z) => z.id === zone.id && z.shape === "rect" && i.x >= z.x[0] && i.x <= z.x[1] && i.z >= z.z[0] && i.z <= z.z[1])) : undefined;
+  const screenHere = zone && zone.kind !== "desk" ? floorData?.items.find((i) => i.type === "screen" && zoneIn(derived, i.x, i.z, true)?.id === zone.id) : undefined;
+  const stageRoom = onStage ? roomOf(derived, zone) : null;
 
   return (
     <div className="desk-controls">
       {following && (
         <button className="pill clickable accent" onClick={() => useNet.setState({ following: null })}>
-          👣 {t("Mengikuti {name} — berhenti", { name: following })}
+          <FootprintsIcon /> {t("Mengikuti {name} — berhenti", { name: following })}
         </button>
       )}
-      {onStage && <span className="pill stage">🎤 {t("Kamu di panggung — semua orang di lantai ini mendengarmu")}</span>}
+      {onStage && (
+        <span className="pill stage">
+          <MicrophoneStageIcon /> {stageRoom ? t("Kamu di panggung — semua orang di {room} mendengarmu", { room: place(stageRoom.name) }) : t("Kamu di panggung — semua orang di lantai ini mendengarmu")}
+        </span>
+      )}
       {nearLift && layout && (
         <div className="lift">
-          <span className="pill">🛗 Lift</span>
+          <span className="pill">
+            <ElevatorIcon /> Lift
+          </span>
           {layout.floors.map((f) => (
             <button
               key={f.id}
@@ -79,7 +121,7 @@ export function ContextActions() {
                 const lift = f.items.find((i) => i.type === "elevator");
                 const exit = lift ? derivedLiftExit(lift) : ([0, 8] as [number, number]);
                 changeFloor(f.id, [exit[0], 0, exit[1]]);
-                import("../Player").then((m) => m.teleportTo(exit[0], exit[1]));
+                teleportTo(exit[0], exit[1]);
               }}
             >
               {place(f.name)}
@@ -89,30 +131,36 @@ export function ContextActions() {
       )}
       {nearGame && !door && (
         <button className="pill clickable accent" onClick={() => openGame(nearGame)}>
-          {nearGame.type === "arcade" ? "🕹️" : "🔴"} <b>F</b> · {nearGame.type === "arcade" ? t("Main Snake") : t("Main Empat Sejajar")}
+          {nearGame.type === "arcade" ? <JoystickIcon /> : <CirclesFourIcon />} <b>F</b> · {nearGame.type === "arcade" ? t("Main Snake") : t("Main Empat Sejajar")}
         </button>
       )}
       {(nearSeat || sitting) && (
         <button className="pill clickable accent" onClick={toggleSit}>
-          🪑 <b>C</b> · {sitting ? t("Berdiri") : t("Duduk")}
+          <ChairIcon /> <b>C</b> · {sitting ? t("Berdiri") : t("Duduk")}
         </button>
       )}
       {here && !hereState && !isGuest && (
         <button className="pill clickable accent" onClick={() => sendDesk("claim", here.id)}>
-          🪑 {t("Jadikan {desk} mejaku", { desk: place(here.name) })}
+          <ChairIcon /> {t("Jadikan {desk} mejaku", { desk: place(here.name) })}
         </button>
       )}
       {here && hereState && hereState.ownerId !== selfId && (
         <span className="pill">
-          {hereState.locked ? "🔒" : "🪑"} {t("{desk} milik {name}", { desk: place(here.name), name: hereState.ownerName })}
+          {hereState.locked ? <LockSimpleIcon /> : <ChairIcon />} {t("{desk} milik {name}", { desk: place(here.name), name: hereState.ownerName })}
         </span>
       )}
       {mine && (
         <>
           <button className={mine[1].locked ? "pill clickable danger" : "pill clickable"} onClick={() => sendDesk(mine[1].locked ? "unlock" : "lock")}>
-            {mine[1].locked
-              ? `🔒 ${t("Fokus aktif di {desk} — buka kunci", { desk: place(mineName) })}`
-              : `🔓 ${t("Kunci {desk} (mode fokus)", { desk: place(mineName) })}`}
+            {mine[1].locked ? (
+              <>
+                <LockSimpleIcon /> {t("Fokus aktif di {desk} — buka kunci", { desk: place(mineName) })}
+              </>
+            ) : (
+              <>
+                <LockSimpleOpenIcon /> {t("Kunci {desk} (mode fokus)", { desk: place(mineName) })}
+              </>
+            )}
           </button>
           {here?.id === mine[0] && (
             <button className="pill clickable" onClick={() => sendDesk("release")}>
@@ -126,7 +174,7 @@ export function ContextActions() {
           const action = doorPrimaryAction(door.id, roomDoor?.id === door.id);
           return (
             <button className="pill clickable accent" onClick={() => sendDoor(door.id, action)}>
-              🚪 <b>F</b> · {doorText(action, door.name)}
+              <DoorIcon /> <b>F</b> · {doorText(action, door.name)}
               {action === "knock" && ` ${t("(terkunci)")}`}
             </button>
           );
@@ -136,38 +184,46 @@ export function ContextActions() {
           className={doorState(roomDoor.id).locked ? "pill clickable danger" : "pill clickable"}
           onClick={() => sendDoor(roomDoor.id, doorState(roomDoor.id).locked ? "unlock" : "lock")}
         >
-          {doorState(roomDoor.id).locked ? `🔒 ${t("Pintu terkunci — buka kunci")}` : `🔓 ${t("Kunci pintu ruangan")}`}
+          {doorState(roomDoor.id).locked ? (
+            <>
+              <LockSimpleIcon /> {t("Pintu terkunci — buka kunci")}
+            </>
+          ) : (
+            <>
+              <LockSimpleOpenIcon /> {t("Kunci pintu ruangan")}
+            </>
+          )}
         </button>
       )}
       {(inRoom || onStage) && zone && (
         <div className="meeting-tools">
           <button className={myHand ? "pill clickable accent" : "pill clickable"} onClick={() => sendHand(!myHand)}>
-            ✋ {myHand ? t("Turunkan tangan") : t("Angkat tangan")}
+            <HandPalmIcon /> {myHand ? t("Turunkan tangan") : t("Angkat tangan")}
           </button>
           <button
             className="pill clickable"
             onClick={() => {
               sendMuteRoom();
-              showNotice(`🔇 ${t("Mic semua orang di {place} dimatikan", { place: place(zone.name) })}`);
+              showNotice(t("Mic semua orang di {place} dimatikan", { place: place(zone.name) }), "mute");
             }}
           >
-            🔇 {t("Mute semua")}
+            <MicrophoneSlashIcon /> {t("Mute semua")}
           </button>
           {inRoom && (
             <button className="pill clickable" onClick={() => useWhiteboard.setState({ open: zone.refId })}>
-              📝 Whiteboard
+              <ChalkboardSimpleIcon /> Whiteboard
             </button>
           )}
           {inRoom && !isGuest && (
             <button className="pill clickable" onClick={() => useNet.setState({ openBooking: zone.refId })}>
-              📅 {t("Jadwal")}
+              <CalendarBlankIcon /> {t("Jadwal")}
             </button>
           )}
         </div>
       )}
       {screenHere && (
         <button className="pill clickable" onClick={() => useNet.setState({ openScreen: screenHere.id })}>
-          🌐 {t("Layar")}
+          <GlobeIcon /> {t("Layar")}
         </button>
       )}
     </div>
@@ -201,10 +257,10 @@ export function MediaBar() {
   return (
     <div className="media-bar">
       <button className={mic ? "media-btn on" : "media-btn"} onClick={toggleMic} title={`${t("Mikrofon")} (M)`}>
-        {mic ? "🎤" : "🔇"}
+        {mic ? <MicrophoneIcon /> : <MicrophoneSlashIcon />}
       </button>
       <button className={cam ? "media-btn on" : "media-btn"} onClick={toggleCam} title={`${t("Kamera")} (V)`}>
-        {cam ? "📷" : "🚫"}
+        {cam ? <VideoCameraIcon /> : <VideoCameraSlashIcon />}
       </button>
       <button
         className={sharing ? "media-btn on sharing" : "media-btn"}
@@ -212,19 +268,39 @@ export function MediaBar() {
         disabled={!zone && !sharing}
         title={zone ? (sharing ? t("Berhenti share screen") : t("Share screen ke orang di area ini")) : t("Masuk ke sebuah area untuk share screen")}
       >
-        🖥️
+        <MonitorArrowUpIcon />
       </button>
-      {ptt && mic && <span className={talking ? "pill ptt on" : "pill ptt"}>{talking ? `🔴 ${t("Bicara…")}` : `⌨️ ${t("Tahan Spasi")}`}</span>}
+      {ptt && mic && (
+        <span className={talking ? "pill ptt on" : "pill ptt"}>
+          {talking ? (
+            <>
+              <RecordIcon weight="fill" /> {t("Bicara…")}
+            </>
+          ) : (
+            <>
+              <KeyboardIcon /> {t("Tahan Spasi")}
+            </>
+          )}
+        </span>
+      )}
       <span className="pill media-info">
-        {zone
-          ? nearby
-            ? `👥 ${t("{n} orang terhubung di area ini", { n: nearby })}`
-            : t("Belum ada orang lain di area ini")
-          : `📏 ${t("Radius {m} m", { m: PROXIMITY.hear })} · ${nearby ? t("{n} orang di dekatmu", { n: nearby }) : t("tidak ada yang di dekatmu")}`}
+        {zone ? (
+          nearby ? (
+            <>
+              <UsersIcon /> {t("{n} orang terhubung di area ini", { n: nearby })}
+            </>
+          ) : (
+            t("Belum ada orang lain di area ini")
+          )
+        ) : (
+          <>
+            <RulerIcon /> {t("Radius {m} m", { m: PROXIMITY.hear })} · {nearby ? t("{n} orang di dekatmu", { n: nearby }) : t("tidak ada yang di dekatmu")}
+          </>
+        )}
       </span>
       {!canPlayAudio && (
         <button className="pill warn" onClick={enableAudio}>
-          🔈 {t("Klik untuk aktifkan suara")}
+          <SpeakerSimpleHighIcon /> {t("Klik untuk aktifkan suara")}
         </button>
       )}
     </div>
@@ -237,25 +313,36 @@ export function TopLeft() {
   const zone = useNet((s) => s.zone);
   const me = useNet((s) => s.directory.find((u) => u.id === s.selfId));
   const phase = useNet((s) => s.phase);
-  const quality = useGraphics((s) => s.quality);
-  const setQuality = useGraphics((s) => s.setQuality);
+  const view = useGraphics((s) => s.view);
   const fps = useGraphics((s) => s.fps);
   return (
     <div className="hud-top">
-      <span className="pill">🟢 {count} online</span>
+      <span className="pill">
+        <span className="dot-online" /> {count} online
+      </span>
       {me && (
         <span className="pill">
           <StatusDot status={me.status} /> {t(STATUS[me.status].label)}
         </span>
       )}
-      {zone && <span className="pill">📍 {place(zone)}</span>}
-      <button className="pill clickable" onClick={() => setQuality(quality === "high" ? "low" : "high")}>
-        {t("Grafik")}: {quality === "high" ? t("Tinggi") : t("Ringan")}
+      {zone && (
+        <span className="pill">
+          <MapPinIcon /> {place(zone)}
+        </span>
+      )}
+      <button className="pill clickable" onClick={() => switchView(view === "2d" ? "3d" : "2d")}>
+        {view === "2d" ? <MapTrifoldIcon /> : <CubeIcon />} {t("Tampilan")}: {view === "2d" ? "2D" : "3D"}
       </button>
-      <span className={fps && fps < 40 ? "pill warn" : "pill"} title={t("Frame per detik — di bawah 40 berarti berat")}>
-        {fps} FPS
-      </span>
-      {phase === "reconnecting" && <span className="pill warn">🔄 {t("Koneksi terputus — menyambung ulang…")}</span>}
+      {view === "3d" && (
+        <span className={fps && fps < 40 ? "pill warn" : "pill"} title={t("Frame per detik — di bawah 40 berarti berat")}>
+          {fps} FPS
+        </span>
+      )}
+      {phase === "reconnecting" && (
+        <span className="pill warn">
+          <ArrowsClockwiseIcon /> {t("Koneksi terputus — menyambung ulang…")}
+        </span>
+      )}
     </div>
   );
 }
@@ -273,21 +360,23 @@ export function Toolbar({ panel, setPanel, compact }: { panel: Panel; setPanel: 
     <div className="toolbar">
       {compact && (
         <button className="tool" onClick={() => (chatOpen ? useNet.setState({ chatOpen: false }) : openChatTab(useNet.getState().chatTab))} title="Chat">
-          💬{unread > 0 && <span className="badge">{unread}</span>}
+          <ChatCircleDotsIcon />
+          {unread > 0 && <span className="badge">{unread}</span>}
         </button>
       )}
       <button className={panel === "members" ? "tool active" : "tool"} onClick={() => toggle("members")} title={t("Anggota")}>
-        👥<span className="tool-n">{online}</span>
+        <UsersIcon />
+        <span className="tool-n">{online}</span>
       </button>
       <button className={panel === "avatar" ? "tool active" : "tool"} onClick={() => toggle("avatar")} title={t("Ubah avatar")}>
-        👕
+        <TShirtIcon />
       </button>
       <button className={panel === "settings" ? "tool active" : "tool"} onClick={() => toggle("settings")} title={t("Setelan")}>
-        ⚙️
+        <GearSixIcon />
       </button>
       {isAdmin && (
         <button className={panel === "admin" ? "tool active" : "tool"} onClick={() => toggle("admin")} title="Admin">
-          🛠️
+          <WrenchIcon />
         </button>
       )}
     </div>
@@ -303,14 +392,20 @@ export function Notice() {
     const timer = setTimeout(() => setVisible(false), 3500);
     return () => clearTimeout(timer);
   }, [notice]);
-  return visible && notice ? <div className="notice">{notice.text}</div> : null;
+  return visible && notice ? (
+    <div className="notice">
+      {notice.icon && <NoticeIcon name={notice.icon} />} {notice.text}
+    </div>
+  ) : null;
 }
 
 export function HelpPanel() {
   const t = useT();
   return (
     <details className="hud-help">
-      <summary>⌨️ {t("Kontrol")}</summary>
+      <summary>
+        <KeyboardIcon /> {t("Kontrol")}
+      </summary>
       <ul>
         <li>
           <b>WASD</b> {t("jalan")} · <b>Shift</b> {t("lari")}

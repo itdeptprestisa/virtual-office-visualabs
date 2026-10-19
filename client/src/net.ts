@@ -152,7 +152,7 @@ interface NetState {
   nearLift: boolean;
   nearGame: { id: string; type: "arcade" | "gameTable" } | null; // mesin arcade / meja game terdekat
   sitting: boolean;
-  notice: { text: string; ts: number } | null;
+  notice: { text: string; ts: number; icon?: NoticeIconName } | null;
   summon: { from: string; name: string; place: string | null; floor: string; floorName: string; p: Vec3; ts: number } | null;
   admin: AdminState | null;
   manualStatus: "available" | "busy" | "away";
@@ -165,7 +165,7 @@ export const useNet = create<NetState>(() => ({
   me: null,
   selfId: null,
   self: null,
-  spawn: [0, 0, 8],
+  spawn: [0, 0, 16],
   players: {},
   layout: null,
   floor: "f1",
@@ -202,7 +202,9 @@ export const useNet = create<NetState>(() => ({
   manualStatus: "available",
 }));
 
-export const showNotice = (text: string) => useNet.setState({ notice: { text, ts: Date.now() } });
+/** Ikon pemberitahuan (dipetakan ke ikon di ui/icons.tsx). */
+export type NoticeIconName = "check" | "door" | "follow" | "link" | "lock" | "pin" | "summon" | "mute" | "attach" | "warn";
+export const showNotice = (text: string, icon?: NoticeIconName) => useNet.setState({ notice: { text, ts: Date.now(), icon } });
 
 // Posisi pemain lain disimpan di luar React supaya update 15x/detik tidak memicu re-render.
 // `p`/`r` = posisi terbaru (untuk proximity); `buf` = riwayat singkat untuk interpolasi visual yang mulus.
@@ -464,7 +466,7 @@ function handle(msg: any) {
     }
     case "move_to":
       setFloorLocal(msg.floor);
-      import("./Player").then((m) => m.teleportTo(msg.p[0], msg.p[2]));
+      import("./actions").then((m) => m.teleportTo(msg.p[0], msg.p[2]));
       showNotice(t("Lantaimu dihapus admin — kamu dipindah ke lantai pertama."));
       break;
     case "bookings":
@@ -495,7 +497,7 @@ function handle(msg: any) {
       useNet.setState({ tempPassword: { username: msg.username, password: msg.password } });
       break;
     case "password_ok":
-      showNotice(`✓ ${t("Password berhasil diganti. Perangkat lain sudah dikeluarkan.")}`);
+      showNotice(t("Password berhasil diganti. Perangkat lain sudah dikeluarkan."), "check");
       break;
     case "state": {
       const selfId = useNet.getState().selfId;
@@ -521,7 +523,7 @@ function handle(msg: any) {
       }));
       if (!mine) {
         addUnread(tab);
-        const preview = c.text || `📎 ${c.file?.name ?? t("lampiran")}`;
+        const preview = c.text || `${t("Lampiran")}: ${c.file?.name ?? t("lampiran")}`;
         if (mentionsMe(c.text)) notify("mention", t("{name} menyebutmu", { name: c.name }), preview);
         else if (!isViewing(tab)) notify("message", tab === "umum" ? `${c.name} · ${t("Umum")}` : `${c.name} · ${place(c.scope)}`, preview, { quiet: true });
       }
@@ -537,7 +539,7 @@ function handle(msg: any) {
       }));
       if (m.from !== selfId) {
         addUnread(`dm:${other}`);
-        if (!isViewing(`dm:${other}`)) notify("message", t("Pesan dari {name}", { name: m.name }), m.text || `📎 ${m.file?.name ?? t("lampiran")}`);
+        if (!isViewing(`dm:${other}`)) notify("message", t("Pesan dari {name}", { name: m.name }), m.text || `${t("Lampiran")}: ${m.file?.name ?? t("lampiran")}`);
       }
       break;
     }
@@ -552,12 +554,12 @@ function handle(msg: any) {
       useNet.setState({ desks: msg.desks, doors: msg.doors });
       break;
     case "knock":
-      showNotice(`🚪 ${t("{name} mengetuk pintu — buka kunci dari dalam kalau boleh masuk", { name: msg.name })}`);
+      showNotice(t("{name} mengetuk pintu — buka kunci dari dalam kalau boleh masuk", { name: msg.name }), "door");
       notify("knock", t("Ada yang mengetuk pintu"), t("{name} ingin masuk", { name: msg.name }));
       break;
     case "mute_request":
       import("./media").then((m) => m.muteMic());
-      showNotice(`🔇 ${t("{name} mematikan mic semua orang di ruangan", { name: msg.by })}`);
+      showNotice(t("{name} mematikan mic semua orang di ruangan", { name: msg.by }), "mute");
       break;
     case "wb_state":
     case "wb_stroke":
@@ -612,7 +614,7 @@ export type DoorAction = "open" | "close" | "lock" | "unlock" | "knock";
 
 export function sendDoor(id: string, action: DoorAction) {
   send({ t: "door", id, action });
-  if (action === "knock") showNotice(`🚪 ${t("Kamu mengetuk pintu…")}`);
+  if (action === "knock") showNotice(t("Kamu mengetuk pintu…"), "door");
 }
 
 /** Aksi tombol F di pintu: ketuk bila terkunci & kita di luar, selain itu buka/tutup. */

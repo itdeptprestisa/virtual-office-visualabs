@@ -80,6 +80,7 @@ interface Data {
   guestLinks: Record<string, { label: string; exp: number; createdBy: string }>;
   screens: Record<string, string>; // id item layar → URL website yang ditampilkan
   scores: Record<string, ScoreEntry[]>; // id game arcade → skor terbaik (satu entri per orang)
+  migrations: string[]; // migrasi data satu kali yang sudah dijalankan
 }
 
 const FILE = resolve(process.env.DATA_FILE ?? "data/db.json");
@@ -103,6 +104,7 @@ function empty(): Data {
     guestLinks: {},
     screens: {},
     scores: {},
+    migrations: [],
   };
 }
 

@@ -16,6 +16,7 @@ import {
 } from "../net";
 import { totalUnread } from "./Hud";
 import { locale, place, t, useT } from "../i18n";
+import { ChatCircleDotsIcon, GlobeIcon, HourglassMediumIcon, MagnifyingGlassIcon, MapPinIcon, PaperclipIcon, SmileyIcon } from "./icons";
 
 const EMOJIS = ["👍", "❤️", "😂", "🎉", "👀", "🙏"];
 const time = (ts: number) => new Date(ts).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
@@ -36,7 +37,7 @@ function Attachment({ file }: { file: FileRef }) {
   }
   return (
     <a href={url} className="chat-file" download={file.name}>
-      📎 {file.name} <span className="muted">({size(file.size)})</span>
+      <PaperclipIcon /> {file.name} <span className="muted">({size(file.size)})</span>
     </a>
   );
 }
@@ -67,7 +68,7 @@ function ReactionBar({ reactions, selfId, onReact }: { reactions?: Reactions; se
         ))
       ) : (
         <button className="react add" onClick={() => setPicking(true)} title={t("Beri reaksi")}>
-          ☺︎+
+          <SmileyIcon />+
         </button>
       )}
     </div>
@@ -107,7 +108,14 @@ function SearchView({ onClose }: { onClose: () => void }) {
             <b>{r.name}</b>
             <span className="scope"> · {r.channel === "umum" ? t("Umum") : `DM ${directory.find((u) => u.id === r.with)?.name ?? ""}`}</span>
             <span className="time"> {new Date(r.ts).toLocaleString(locale(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
-            <div>{r.text || (r.file ? `📎 ${r.file.name}` : "")}</div>
+            <div>
+              {r.text ||
+                (r.file && (
+                  <>
+                    <PaperclipIcon /> {r.file.name}
+                  </>
+                ))}
+            </div>
           </button>
         ))}
       </div>
@@ -175,7 +183,7 @@ export function ChatPanel() {
       deliver(text.trim(), ref);
       setText("");
     } catch (err) {
-      showNotice(`📎 ${t((err as Error).message)}`);
+      showNotice(t((err as Error).message), "attach");
     } finally {
       setUploading(false);
     }
@@ -198,7 +206,7 @@ export function ChatPanel() {
   if (!open) {
     return (
       <button className="chat-toggle pill clickable" onClick={() => openChatTab(tab)}>
-        💬 {t("Chat")} <Badge n={totalUnread(unread)} />
+        <ChatCircleDotsIcon /> {t("Chat")} <Badge n={totalUnread(unread)} />
       </button>
     );
   }
@@ -220,10 +228,10 @@ export function ChatPanel() {
     >
       <div className="chat-tabs">
         <button className={tab === "area" ? "tab active" : "tab"} onClick={() => openChatTab("area")} title={t("Hanya orang yang bisa mendengarmu")}>
-          📍 {zone ? place(zone) : t("Sekitar")} <Badge n={unread.area} />
+          <MapPinIcon /> {zone ? place(zone) : t("Sekitar")} <Badge n={unread.area} />
         </button>
         <button className={tab === "umum" ? "tab active" : "tab"} onClick={() => openChatTab("umum")} title={t("Semua orang")}>
-          🌐 {t("Umum")} <Badge n={unread.umum} />
+          <GlobeIcon /> {t("Umum")} <Badge n={unread.umum} />
         </button>
         {openDms.map((id) => {
           const u = directory.find((d) => d.id === id);
@@ -231,7 +239,7 @@ export function ChatPanel() {
           return (
             <span key={id} className={tab === dmTab ? "tab active dm" : "tab dm"}>
               <button onClick={() => openChatTab(dmTab)}>
-                {u?.online ? "🟢" : "⚪"} {u?.name ?? "?"} <Badge n={unread[dmTab]} />
+                <span className={u?.online ? "dot-online" : "dot-online off"} /> {u?.name ?? "?"} <Badge n={unread[dmTab]} />
               </button>
               <button className="x" onClick={() => closeDm(id)} aria-label={t("Tutup percakapan")}>
                 ×
@@ -240,7 +248,7 @@ export function ChatPanel() {
           );
         })}
         <button className={searching ? "tab active" : "tab"} onClick={() => setSearching(!searching)} title={t("Cari pesan")} aria-label={t("Cari pesan")}>
-          🔍
+          <MagnifyingGlassIcon />
         </button>
         <button className="tab collapse" onClick={() => useNet.setState({ chatOpen: false })} aria-label={t("Sembunyikan chat")}>
           ▾
@@ -276,7 +284,7 @@ export function ChatPanel() {
           </div>
           <form onSubmit={submit} className="chat-form">
             <button type="button" className="attach" onClick={() => fileInput.current?.click()} disabled={uploading} title={t("Kirim file (maks 5 MB)")}>
-              {uploading ? "⏳" : "📎"}
+              {uploading ? <HourglassMediumIcon /> : <PaperclipIcon />}
             </button>
             <input
               ref={fileInput}

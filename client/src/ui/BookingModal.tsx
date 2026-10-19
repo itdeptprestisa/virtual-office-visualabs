@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { sendBooking, sendUnbook, useNet } from "../net";
 import { locale, place, t, useT } from "../i18n";
+import { CalendarBlankIcon } from "./icons";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const dateInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -47,7 +48,9 @@ export function BookingModal() {
     <div className="overlay modal" onKeyDown={(e) => e.key === "Escape" && close()}>
       <div className="card booking">
         <div className="side-head">
-          <h2>📅 {t("Jadwal ruangan")}</h2>
+          <h2>
+          <CalendarBlankIcon /> {t("Jadwal ruangan")}
+        </h2>
           <button className="x" onClick={close} aria-label={t("Tutup")}>
             ×
           </button>

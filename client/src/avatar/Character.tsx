@@ -8,10 +8,12 @@ import {
   CylinderGeometry,
   DoubleSide,
   IcosahedronGeometry,
+  LatheGeometry,
   MeshStandardMaterial,
   Quaternion,
   SphereGeometry,
   TorusGeometry,
+  Vector2,
   Vector3,
   type BufferGeometry,
   type Group,
@@ -20,28 +22,44 @@ import {
 import type { AvatarConfig } from "./config";
 import { ANIM } from "../anims";
 
-// Karakter low-poly stylized dari primitif. Tinggi ±1,8 m, menghadap +z.
+// Karakter semi-realistis dari primitif. Tinggi ±1,78 m, menghadap +z.
 // Struktur: root → hips → (kaki kiri/kanan) + torso → (lengan kiri/kanan, kepala).
+// Kepala dimodelkan dalam ukuran lama (bola r 0,25) lalu diperkecil lewat HEAD_SCALE ke proporsi manusia
+// (±7 kepala per tinggi badan) — rambut, hijab, topi & kacamata ikut mengecil tanpa diubah satu per satu.
 
 const PI = Math.PI;
 const HIPS_Y = 0.82;
+const HEAD_Y = 0.8;
+const HEAD_SCALE: [number, number, number] = [0.58, 0.66, 0.62];
 
 // Geometri dipakai bersama oleh semua avatar (dibuat sekali).
 const G = {
-  torso: new CapsuleGeometry(0.2, 0.25, 6, 16),
+  // Badan diputar dari profil (jari-jari, tinggi): pinggul → pinggang → dada → bahu melandai → pangkal leher.
+  torso: new LatheGeometry(
+    [[0, -0.07], [0.17, -0.06], [0.176, 0.04], [0.166, 0.15], [0.18, 0.26], [0.2, 0.37], [0.205, 0.44], [0.19, 0.5], [0.14, 0.55], [0.07, 0.58], [0, 0.585]].map(
+      ([r, y]) => new Vector2(r, y),
+    ),
+    20,
+  ),
+  elbow: new SphereGeometry(0.05, 10, 8),
+  knee: new SphereGeometry(0.078, 12, 8),
   pelvis: new SphereGeometry(0.2, 16, 12),
-  upperArm: new CapsuleGeometry(0.065, 0.16, 4, 10),
-  forearm: new CapsuleGeometry(0.058, 0.14, 4, 10),
-  hand: new SphereGeometry(0.062, 10, 8),
+  upperArm: new CapsuleGeometry(0.058, 0.17, 4, 10),
+  forearm: new CapsuleGeometry(0.048, 0.15, 4, 10),
+  hand: new SphereGeometry(0.05, 12, 10),
+  thumb: new CapsuleGeometry(0.016, 0.035, 3, 6),
   thigh: new CapsuleGeometry(0.09, 0.2, 4, 12),
   shin: new CapsuleGeometry(0.075, 0.2, 4, 12),
   shoe: new SphereGeometry(1, 14, 10),
-  neck: new CylinderGeometry(0.07, 0.08, 0.14, 12),
+  sole: new BoxGeometry(0.15, 0.025, 0.28),
+  neck: new CylinderGeometry(0.052, 0.062, 0.18, 14),
   head: new SphereGeometry(0.25, 32, 24),
-  eye: new SphereGeometry(0.03, 12, 10),
-  brow: new BoxGeometry(0.07, 0.016, 0.012),
-  mouth: new TorusGeometry(0.035, 0.009, 6, 14, PI),
-  cheek: new SphereGeometry(0.035, 10, 8),
+  eye: new SphereGeometry(0.042, 14, 10),
+  iris: new SphereGeometry(0.021, 12, 10),
+  brow: new BoxGeometry(0.08, 0.011, 0.01),
+  nose: new SphereGeometry(0.04, 12, 10),
+  ear: new SphereGeometry(0.06, 12, 10),
+  lips: new SphereGeometry(0.045, 14, 10),
   // rambut
   cap: new SphereGeometry(0.268, 28, 14, 0, 2 * PI, 0, 0.5 * PI),
   buzz: new SphereGeometry(0.258, 28, 14, 0, 2 * PI, 0, 0.42 * PI),
@@ -67,6 +85,8 @@ const G = {
   bridge: new BoxGeometry(0.055, 0.01, 0.01),
   // pakaian
   collar: new TorusGeometry(0.095, 0.025, 6, 18),
+  neckline: new TorusGeometry(0.075, 0.012, 6, 18),
+  belt: new TorusGeometry(0.205, 0.01, 4, 28),
   hood: new SphereGeometry(0.16, 16, 12),
   pocket: new BoxGeometry(0.22, 0.1, 0.02),
   shirtFront: new BoxGeometry(0.11, 0.3, 0.02),
@@ -154,7 +174,10 @@ function useMaterials(c: AvatarConfig) {
       new MeshStandardMaterial({ color, roughness: 0.75, ...extra });
     const darker = (hex: string, f: number) => "#" + new Color(hex).multiplyScalar(f).getHexString();
     return {
-      skin: m(c.skin, { roughness: 0.6 }),
+      skin: m(c.skin, { roughness: 0.55 }),
+      lips: m("#" + new Color(c.skin).lerp(new Color("#a8504a"), 0.4).getHexString(), { roughness: 0.45 }),
+      eyeWhite: m("#f4f1ec", { roughness: 0.3 }),
+      iris: m("#3b2618", { roughness: 0.2 }),
       hair: m(c.hairColor, { roughness: 0.85, side: DoubleSide }),
       hijab: m(c.hijabColor, { roughness: 0.9, side: DoubleSide }),
       top: m(c.topColor),
@@ -164,7 +187,6 @@ function useMaterials(c: AvatarConfig) {
       dark: m("#1d1b22", { roughness: 0.4 }),
       white: m("#f7f7f2"),
       tie: m("#8b1e2d"),
-      cheek: m("#f29b8f", { transparent: true, opacity: 0.55, roughness: 1 }),
       brow: m(darker(c.hairColor, 0.8)),
     };
   }, [c]);
@@ -184,8 +206,8 @@ function Part({ g, m, ...props }: { g: BufferGeometry; m: Material } & Record<st
 const LOW = {
   body: new CapsuleGeometry(0.22, 0.42, 3, 8),
   legs: new CapsuleGeometry(0.17, 0.42, 3, 8),
-  head: new SphereGeometry(0.25, 12, 10),
-  hair: new SphereGeometry(0.27, 12, 6, 0, 2 * PI, 0, 0.55 * PI),
+  head: new SphereGeometry(0.155, 12, 10),
+  hair: new SphereGeometry(0.168, 12, 6, 0, 2 * PI, 0, 0.55 * PI),
 };
 
 export function CharacterLow({ config: c, getAnim }: { config: AvatarConfig; getAnim: () => number }) {
@@ -203,8 +225,8 @@ export function CharacterLow({ config: c, getAnim }: { config: AvatarConfig; get
     <group ref={root}>
       <mesh geometry={LOW.legs} material={c.bottom === "pants" ? mat.bottom : mat.skin} position={[0, 0.45, 0]} scale={[1.15, 1, 0.8]} />
       <mesh geometry={LOW.body} material={mat.top} position={[0, 1.07, 0]} scale={[1.1, 1, 0.8]} />
-      <mesh geometry={LOW.head} material={mat.skin} position={[0, 1.57, 0]} />
-      {(c.hijab || c.hair !== "none") && <mesh geometry={LOW.hair} material={c.hijab ? mat.hijab : mat.hair} position={[0, 1.57, 0]} rotation-x={-0.35} />}
+      <mesh geometry={LOW.head} material={mat.skin} position={[0, 1.62, 0]} scale={[0.93, 1.06, 1]} />
+      {(c.hijab || c.hair !== "none") && <mesh geometry={LOW.hair} material={c.hijab ? mat.hijab : mat.hair} position={[0, 1.62, 0]} rotation-x={-0.35} />}
     </group>
   );
 }
@@ -269,8 +291,10 @@ export function Character({
     <group ref={side === 1 ? lh : rh} position={[0.1 * side, -0.02, 0]}>
       <Part g={G.thigh} m={c.bottom === "skirt" ? mat.skin : mat.bottom} position={[0, -0.19, 0]} />
       <group ref={side === 1 ? lk : rk} position={[0, -0.38, 0]}>
+        <Part g={G.knee} m={c.bottom === "pants" ? mat.bottom : mat.skin} />
         <Part g={G.shin} m={c.bottom === "pants" ? mat.bottom : mat.skin} position={[0, -0.155, 0]} />
-        <Part g={G.shoe} m={mat.shoe} position={[0, -0.36, 0.035]} scale={[0.078, 0.06, 0.135]} />
+        <Part g={G.shoe} m={mat.shoe} position={[0, -0.355, 0.035]} scale={[0.072, 0.055, 0.13]} />
+        <Part g={G.sole} m={mat.dark} position={[0, -0.395, 0.035]} scale={[0.95, 1, 0.92]} />
       </group>
     </group>
   );
@@ -279,8 +303,10 @@ export function Character({
     <group ref={side === 1 ? ls : rs} position={[shoulderX * side, 0.47, 0]}>
       <Part g={G.upperArm} m={mat.top} position={[0, -0.14, 0]} />
       <group ref={side === 1 ? le : re} position={[0, -0.28, 0]}>
-        <Part g={G.forearm} m={sleeveLong ? mat.top : mat.skin} position={[0, -0.105, 0]} />
-        <Part g={G.hand} m={mat.skin} position={[0, -0.27, 0]} />
+        <Part g={G.elbow} m={sleeveLong ? mat.top : mat.skin} />
+        <Part g={G.forearm} m={sleeveLong ? mat.top : mat.skin} position={[0, -0.115, 0]} />
+        <Part g={G.hand} m={mat.skin} position={[0, -0.27, 0.005]} scale={[0.62, 1.25, 1]} />
+        <Part g={G.thumb} m={mat.skin} position={[-0.012 * side, -0.245, 0.04]} rotation-x={0.5} />
       </group>
     </group>
   );
@@ -291,17 +317,19 @@ export function Character({
       <group position={[0, HIPS_Y, 0]}>
         <Part g={G.pelvis} m={mat.bottom} position={[0, 0.03, 0]} scale={male ? [1.02, 0.5, 0.74] : [1.04, 0.5, 0.74]} />
         {c.bottom === "skirt" && <Part g={G.skirt} m={mat.bottom} position={[0, -0.12, 0]} />}
+        {c.bottom !== "skirt" && c.top !== "hoodie" && <Part g={G.belt} m={mat.dark} position={[0, 0.07, 0]} rotation-x={PI / 2} scale={male ? [0.98, 0.69, 1] : [0.95, 0.69, 1]} />}
         {legs(1)}
         {legs(-1)}
 
         <group ref={torso}>
-          <Part g={G.torso} m={mat.top} position={[0, 0.25, 0]} scale={male ? [1.12, 1, 0.78] : [0.98, 1, 0.76]} />
-          <Part g={G.neck} m={mat.skin} position={[0, 0.6, 0]} />
+          <Part g={G.torso} m={mat.top} scale={male ? [1.12, 1, 0.74] : [0.98, 1, 0.72]} />
+          <Part g={G.neck} m={mat.skin} position={[0, 0.63, 0.005]} />
+          {c.top === "tshirt" && <Part g={G.neckline} m={mat.topAccent} position={[0, 0.555, 0.01]} rotation-x={PI / 2} scale={[1.15, 1, 1]} />}
           {c.top === "shirt" && <Part g={G.collar} m={mat.topAccent} position={[0, 0.56, 0]} rotation-x={PI / 2} />}
           {c.top === "hoodie" && (
             <>
               <Part g={G.hood} m={mat.top} position={[0, 0.52, -0.14]} scale={[1.3, 0.8, 0.8]} />
-              <Part g={G.pocket} m={mat.topAccent} position={[0, 0.1, 0.158]} />
+              <Part g={G.pocket} m={mat.topAccent} position={[0, 0.1, 0.128]} />
             </>
           )}
           {c.top === "suit" && (
@@ -313,22 +341,25 @@ export function Character({
           {arm(1)}
           {arm(-1)}
 
-          <group ref={head} position={[0, 0.75, 0]}>
+          <group ref={head} position={[0, HEAD_Y, 0]} scale={HEAD_SCALE}>
             <Part g={G.head} m={mat.skin} />
             {[1, -1].map((s) => (
               <group key={s}>
-                <Part g={G.eye} m={mat.dark} position={[0.085 * s, 0, 0.226]} scale={[1, 1.35, 0.6]} />
-                <Part g={G.brow} m={mat.brow} position={[0.085 * s, 0.075, 0.236]} rotation-z={0.12 * s} />
-                <Part g={G.cheek} m={mat.cheek} position={[0.14 * s, -0.06, 0.196]} scale={[1, 0.7, 0.4]} />
+                <Part g={G.eye} m={mat.eyeWhite} position={[0.088 * s, 0.01, 0.208]} scale={[1, 0.62, 0.5]} />
+                <Part g={G.iris} m={mat.iris} position={[0.086 * s, 0.01, 0.225]} scale={[1, 1.05, 0.5]} />
+                <Part g={G.brow} m={mat.brow} position={[0.09 * s, 0.075, 0.226]} rotation-z={0.1 * s} />
+                <Part g={G.ear} m={mat.skin} position={[0.238 * s, -0.005, 0]} scale={[0.4, 0.95, 0.65]} />
               </group>
             ))}
-            <Part g={G.mouth} m={mat.dark} position={[0, -0.075, 0.238]} rotation-z={PI} />
+            <Part g={G.nose} m={mat.skin} position={[0, -0.045, 0.235]} scale={[0.62, 1.05, 0.85]} />
+            <Part g={G.lips} m={mat.lips} position={[0, -0.13, 0.205]} scale={[1, 0.3, 0.42]} />
 
             {c.hijab ? (
               <>
                 <Part g={G.hijabShell} m={mat.hijab} />
                 <Part g={G.hijabTop} m={mat.hijab} />
-                <Part g={G.hijabDrape} m={mat.hijab} position={[0, -0.33, -0.01]} />
+                {/* kerudung menjuntai sampai bahu (dikoreksi dari skala kepala yang diperkecil) */}
+                <Part g={G.hijabDrape} m={mat.hijab} position={[0, -0.36, -0.01]} scale={[1.05, 1.1, 0.85]} />
               </>
             ) : (
               <Hair style={c.hair} m={mat.hair} />

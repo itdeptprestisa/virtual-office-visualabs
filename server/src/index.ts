@@ -11,8 +11,16 @@ import { Limiter, tooMany } from "./ratelimit.js";
 import { staticHandler } from "./static.js";
 import {
   PROXIMITY,
+  SPAWN,
   defaultLayout,
+  addDecorations,
+  isDecoration1,
+  isDecoration2,
+  moveDecorations,
+  DECORATION_MOVES,
   derive,
+  linkIn,
+  roomOf,
   sanitizeLayout,
   zoneIn,
   type Derived,
@@ -136,6 +144,29 @@ setInterval(cleanUploads, 3600_000).unref();
 // ---------- denah & state dunia ----------
 
 let layout: Layout = (db.layout && sanitizeLayout(db.layout)) || defaultLayout();
+// Denah tersimpan dari sebelum ada dekorasi dilengkapi sekali per gelombang — dekorasi yang kemudian dihapus admin
+// tidak dimunculkan lagi.
+for (const [id, pick] of [
+  ["dekorasi-2026-10", isDecoration1],
+  ["dekorasi-2026-10b", isDecoration2],
+] as const) {
+  if (db.migrations.includes(id)) continue;
+  if (db.layout) {
+    layout = sanitizeLayout(addDecorations(layout, defaultLayout(), pick)) ?? layout;
+    db.layout = layout;
+  }
+  db.migrations.push(id);
+  save();
+}
+// Printer & tanaman besar yang dulu ditaruh di persimpangan lorong dipindah (kecuali sudah dipindah admin).
+if (!db.migrations.includes("persimpangan-2026-10")) {
+  if (db.layout) {
+    layout = sanitizeLayout(moveDecorations(layout, DECORATION_MOVES)) ?? layout;
+    db.layout = layout;
+  }
+  db.migrations.push("persimpangan-2026-10");
+  save();
+}
 let derived: Record<string, Derived> = derive(layout);
 const firstFloor = () => layout.floors[0].id;
 const floorName = (id: string) => layout.floors.find((f) => f.id === id)?.name ?? id;
@@ -179,13 +210,27 @@ const insideRoom = (roomId: unknown, pl: Player) => pl.zone?.id === `room:${room
 const calendarCache = new Map<string, CalEvent[]>();
 const calendarBusy = new Map<string, CalEvent | null>();
 
+/**
+ * Dianggap rapat: di panggung, di aula yang punya panggung, atau di ruangan bersuara penuh bersama orang lain
+ * (sendirian di ruang manager/CEO = sedang bekerja, bukan rapat).
+ */
+function inMeeting(pl: Player, zone: Zone) {
+  if (zone.stage) return true;
+  if (zone.kind !== "room") return false;
+  if (derived[pl.floor]?.zones.some((z) => z.stage && z.parent === zone.id)) return true;
+  if (zone.audio !== "full") return false;
+  for (const o of players.values()) if (o !== pl && o.floor === pl.floor && o.zone?.id === zone.id) return true;
+  return false;
+}
+
 function statusOf(pl: Player): "available" | "busy" | "meeting" | "away" | "focus" {
   if (pl.manual === "busy") return "busy";
   if (pl.manual === "away") return "away";
   const myDesk = deskOf(pl.id);
   if (myDesk && lockedDesks.has(myDesk)) return "focus";
   if (calendarBusy.get(pl.id)) return "meeting";
-  if (pl.zone?.kind === "room" || pl.zone?.stage) return "meeting";
+  if (pl.zone?.audio === "mute") return "away"; // toilet, mushola
+  if (pl.zone && inMeeting(pl, pl.zone)) return "meeting";
   if (pl.idle) return "away";
   return "available";
 }
@@ -253,7 +298,7 @@ const bookingsView = () => ({ t: "bookings", list: upcomingBookings() });
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const clamp = (v: number, lim: number) => Math.max(-lim, Math.min(lim, v));
 const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
-const randomSpawn = (): Vec3 => [Math.random() * 10 - 5, 0, 7 + Math.random() * 4];
+const randomSpawn = (): Vec3 => [SPAWN.x[0] + Math.random() * (SPAWN.x[1] - SPAWN.x[0]), 0, SPAWN.z[0] + Math.random() * (SPAWN.z[1] - SPAWN.z[0])];
 
 function validVec3(v: unknown): Vec3 | null {
   if (!Array.isArray(v) || v.length !== 3 || !v.every(isNum)) return null;
@@ -281,14 +326,13 @@ function fileRef(v: any): FileRef | undefined {
   return f ? { id: v.id, name: f.name, mime: f.mime, size: f.size } : undefined;
 }
 
-/** Siapa yang menerima chat "area" dari pengirim: satu area; panggung = seluruh lantai di luar ruangan; selain itu radius dekat. */
+/** Siapa yang menerima chat "area" dari pengirim: sama dengan siapa yang bisa mendengar suaranya (linkIn). */
 function areaAudience(me: Player) {
-  const zone = me.zone;
   return (pl: Player) => {
     if (pl.floor !== me.floor) return false;
-    if (zone?.stage) return pl.zone?.kind !== "room" || pl.zone?.id === zone.id;
-    if (zone) return pl.zone?.id === zone.id;
-    return !pl.zone && Math.hypot(pl.p[0] - me.p[0], pl.p[2] - me.p[2]) <= PROXIMITY.hear + PROXIMITY.hysteresis;
+    if (pl === me) return true;
+    const d = derived[me.floor];
+    return !!d && linkIn(d, pl.p[0], pl.p[2], me.p[0], me.p[2]).distance <= PROXIMITY.hear + PROXIMITY.hysteresis;
   };
 }
 
@@ -297,7 +341,43 @@ function setZone(pl: Player) {
   if (z?.id !== pl.zone?.id) {
     pl.zone = z;
     markDirectory();
+    sendScreens(pl);
   }
+}
+
+// ---------- website di layar presentasi: hanya untuk orang di ruangan layar itu ----------
+
+/** Bisa melihat layar? Sama dengan aturan suara: satu zona dengan layar; layar di panggung = seisi ruangan panggung itu. */
+function canSeeScreen(pl: Player, floor: string, zone: Zone) {
+  if (pl.floor !== floor) return false;
+  if (pl.zone?.id === zone.id) return true;
+  const d = derived[floor];
+  return !!zone.stage && !!d && roomOf(d, zone)?.id === roomOf(d, pl.zone)?.id;
+}
+
+/** Alamat website hanya dikirim ke yang bisa melihat layarnya — orang di luar ruangan tidak menerima apa pun. */
+function screensFor(pl: Player): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of layout.floors) {
+    const d = derived[f.id];
+    if (!d) continue;
+    for (const it of f.items) {
+      const url = db.screens[it.id];
+      if (!url || it.type !== "screen") continue;
+      const zone = zoneIn(d, it.x, it.z, true);
+      if (zone && canSeeScreen(pl, f.id, zone)) out[it.id] = url;
+    }
+  }
+  return out;
+}
+
+const lastScreens = new WeakMap<Player, string>();
+function sendScreens(pl: Player) {
+  const map = screensFor(pl);
+  const key = JSON.stringify(map);
+  if (lastScreens.get(pl) === key) return;
+  lastScreens.set(pl, key);
+  send(pl.ws, { t: "screens", map });
 }
 
 // ---------- game arcade (Lantai 2) ----------
@@ -541,7 +621,7 @@ wss.on("connection", (ws, req) => {
       });
       send(ws, worldView());
       send(ws, bookingsView());
-      send(ws, { t: "screens", map: db.screens });
+      sendScreens(pl);
       send(ws, { t: "directory", users: directory() });
       broadcast({ t: "join", player: publicView(pl) }, pl.id);
       broadcast(worldView(), pl.id);
@@ -839,14 +919,14 @@ function handle(me: Player, msg: any) {
     case "screen_url": {
       const item = layout.floors.flatMap((f) => f.items.map((i) => ({ i, f: f.id }))).find(({ i }) => i.id === msg.item && i.type === "screen");
       if (!item) return;
-      const zone = zoneIn(derived[item.f], item.i.x, item.i.z);
+      const zone = zoneIn(derived[item.f], item.i.x, item.i.z, true);
       if (!zone || me.zone?.id !== zone.id) return send(me.ws, { t: "notice", text: "Masuk ke ruangan layar itu dulu." });
       const url = text(msg.url, 1000);
       if (url && !/^https:\/\//i.test(url)) return send(me.ws, { t: "notice", text: "Alamat website harus diawali https://" });
       if (url) db.screens[item.i.id] = url;
       else delete db.screens[item.i.id];
       save();
-      broadcast({ t: "screens", map: db.screens });
+      for (const pl of players.values()) sendScreens(pl);
       return;
     }
     // ----- whiteboard per ruangan (hanya orang di dalam ruangan yang bisa melihat & menggambar) -----
@@ -960,6 +1040,7 @@ function handle(me: Player, msg: any) {
           broadcast({ t: "player", id: pl.id, floor: pl.floor, p: pl.p }, pl.id);
         }
         pl.zone = zoneAt(pl.floor, pl.p);
+        sendScreens(pl);
       }
       save();
       broadcast({ t: "layout", layout }, msg.reset ? undefined : me.id);

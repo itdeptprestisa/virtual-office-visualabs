@@ -3,6 +3,7 @@ import { AvatarEditor } from "../avatar/AvatarEditor";
 import { randomAvatar } from "../avatar/config";
 import { enter, joinAsGuest, login, register, useNet } from "../net";
 import { setLang, useLang, useT } from "../i18n";
+import { HandWavingIcon } from "./icons";
 
 /** Pilihan bahasa (ID/EN). */
 export function LangSwitch() {
@@ -132,7 +133,9 @@ export function FirstAvatarScreen() {
         onChange={setAvatar}
         header={
           <div className="editor-header">
-            <h1>{t("Halo, {name}! 👋", { name: me?.name ?? "" })}</h1>
+            <h1>
+              {t("Halo, {name}!", { name: me?.name ?? "" })} <HandWavingIcon />
+            </h1>
             <p className="muted">{t("Buat avatarmu dulu. Bisa diubah lagi kapan saja.")}</p>
           </div>
         }

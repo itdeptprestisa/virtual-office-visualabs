@@ -1,41 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
-import { CanvasTexture, SRGBColorSpace } from "three";
+import { useEffect, useRef, useState, type PointerEvent as RPointerEvent } from "react";
 import { clearBoard, drawStroke, paint, useWhiteboard, type Stroke } from "./whiteboard";
 import { useNet } from "./net";
 import { place, t, useT } from "./i18n";
-
-const TEX_W = 1024;
-const TEX_H = 552; // rasio 2,6 × 1,4
-
-/** Permukaan whiteboard 3D: coretan ruangan ini, hanya terlihat oleh orang di dalam ruangan. */
-export function WhiteboardMaterial({ room }: { room: string | null }) {
-  const inside = useNet((s) => !!room && s.zoneId === `room:${room}`);
-  const strokes = useWhiteboard((s) => (room ? s.boards[room] : undefined));
-  const { canvas, texture } = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = TEX_W;
-    canvas.height = TEX_H;
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    texture.anisotropy = 4;
-    return { canvas, texture };
-  }, []);
-
-  useEffect(() => {
-    const ctx = canvas.getContext("2d")!;
-    paint(ctx, inside ? (strokes ?? []) : [], TEX_W, TEX_H);
-    if (!inside) {
-      ctx.fillStyle = "#9aa1ad";
-      ctx.font = "28px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(t("Masuk ruangan untuk melihat whiteboard"), TEX_W / 2, TEX_H / 2);
-    }
-    texture.needsUpdate = true;
-  }, [inside, strokes, canvas, texture]);
-
-  useEffect(() => () => texture.dispose(), [texture]);
-  return <meshBasicMaterial map={texture} toneMapped={false} />;
-}
+import { ChalkboardSimpleIcon } from "./ui/icons";
 
 const COLORS = ["#1f2335", "#e5484d", "#2f80ed", "#27ae60", "#f2994a", "#9b51e0"];
 const ERASER = "#ffffff";
@@ -101,7 +68,9 @@ export function WhiteboardModal() {
     <div className="overlay modal" onKeyDown={(e) => e.key === "Escape" && close()}>
       <div className="wb">
         <div className="wb-head">
-          <b>📝 {place(roomName)}</b>
+          <b>
+            <ChalkboardSimpleIcon /> {place(roomName)}
+          </b>
           <div className="wb-tools">
             {COLORS.map((c) => (
               <button key={c} className={c === color ? "swatch active" : "swatch"} style={{ background: c }} onClick={() => setColor(c)} aria-label={`${t("Warna")} ${c}`} />

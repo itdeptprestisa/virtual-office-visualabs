@@ -1,24 +1,18 @@
-import { Suspense, useRef } from "react";
+import { Suspense, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Environment, Lightformer, PerformanceMonitor } from "@react-three/drei";
+import { Environment, Lightformer, OrthographicCamera, PerformanceMonitor } from "@react-three/drei";
 import { Bloom, EffectComposer, N8AO, SMAA, ToneMapping, Vignette } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import { Physics } from "@react-three/rapier";
-import { create } from "zustand";
 import { World } from "./World";
 import { Player } from "./Player";
 import { RemotePlayer } from "./RemotePlayer";
 import { useNet } from "./net";
+import { WORLD } from "../../shared/layout";
+import { useGraphics } from "./graphics";
+import { PAL } from "./world2d/palette";
 
-type Quality = "high" | "low";
-
-export const useGraphics = create<{ quality: Quality; fps: number; calls: number; tris: number; setQuality: (q: Quality) => void }>((set) => ({
-  quality: "high",
-  fps: 0,
-  calls: 0,
-  tris: 0,
-  setQuality: (quality) => set({ quality }),
-}));
+export { useGraphics, type Quality } from "./graphics";
 
 // Hitung FPS nyata (dua kali per detik) untuk ditampilkan di HUD.
 function FpsMeter() {
@@ -41,24 +35,35 @@ function FpsMeter() {
   return null;
 }
 
-const BG = "#d9cfc1";
+const BG = PAL.bg; // abu dingin (palet B), bukan krem
+// Kotak bayangan (berpusat di titik 0,0 tempat cahaya mengarah) menjangkau pojok gedung terjauh.
+const SHADOW_EXTENT = Math.max(...[WORLD.minX, WORLD.maxX].flatMap((x) => [WORLD.minZ, WORLD.maxZ].map((z) => Math.hypot(x, z)))) + 2;
 
 // Cahaya lingkungan dibangkitkan dari "lampu" virtual (tanpa unduh HDR): jendela utara + plafon + lampu hangat.
-function Lighting({ high }: { high: boolean }) {
+function Lighting({ high, flat }: { high: boolean; flat: boolean }) {
   const shadowSize = high ? 2048 : 1024;
+  if (flat) {
+    // Tanpa pantulan lingkungan & bayangan: langit-tanah lebih terang supaya warna tetap hidup.
+    return (
+      <>
+        <hemisphereLight args={["#ffffff", "#b8bfc8", 1.6]} />
+        <directionalLight position={[-12, 20, 8]} intensity={1.8} color="#fffaf2" />
+      </>
+    );
+  }
   return (
     <>
-      <hemisphereLight args={["#ffffff", "#c9b89e", 0.35]} />
+      <hemisphereLight args={["#ffffff", "#b8bfc8", 0.35]} />
       <directionalLight
         position={[-12, 20, 8]}
         intensity={2.6}
-        color="#fff3e0"
+        color="#fffaf2"
         castShadow
         shadow-mapSize={[shadowSize, shadowSize]}
-        shadow-camera-left={-22}
-        shadow-camera-right={22}
-        shadow-camera-top={18}
-        shadow-camera-bottom={-18}
+        shadow-camera-left={-SHADOW_EXTENT}
+        shadow-camera-right={SHADOW_EXTENT}
+        shadow-camera-top={SHADOW_EXTENT}
+        shadow-camera-bottom={-SHADOW_EXTENT}
         shadow-bias={-0.0005}
         shadow-normalBias={0.02}
       />
@@ -71,7 +76,8 @@ function Lighting({ high }: { high: boolean }) {
   );
 }
 
-function Effects({ high }: { high: boolean }) {
+function Effects({ high, flat }: { high: boolean; flat: boolean }) {
+  if (flat) return null; // tanpa pass layar penuh sama sekali
   if (!high) {
     return (
       <EffectComposer multisampling={0}>
@@ -82,7 +88,7 @@ function Effects({ high }: { high: boolean }) {
   }
   return (
     <EffectComposer multisampling={0}>
-      <N8AO halfRes aoRadius={1.2} distanceFalloff={0.6} intensity={2.2} color="#3b2f27" />
+      <N8AO halfRes aoRadius={1.2} distanceFalloff={0.6} intensity={2.2} color="#262b36" />
       <Bloom mipmapBlur luminanceThreshold={0.9} intensity={0.45} />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
       <SMAA />
@@ -94,36 +100,49 @@ function Effects({ high }: { high: boolean }) {
 export function Scene() {
   const players = useNet((s) => s.players);
   const floor = useNet((s) => s.floor);
-  const high = useGraphics((s) => s.quality) === "high";
+  const quality = useGraphics((s) => s.quality);
+  const high = quality === "high";
+  const flat = quality === "flat";
+  // Isi dunia (berisi label <Html>) baru dirender setelah event kanvas tersambung. Tanpa ini, saat 3D dipasang ulang
+  // (ganti tampilan 2D → 3D kedua kalinya, Rapier sudah ada di cache) label terpasang sebelum event tersambung dan
+  // drei memindahkannya di tengah render → "removeChild" gagal saat 3D dilepas.
+  const [ready, setReady] = useState(false);
 
   return (
     <Canvas
-      shadows="percentage"
+      shadows={flat ? false : "percentage"}
       dpr={high ? [1, 1.5] : 1}
       gl={{ antialias: false }}
       camera={{ position: [0, 12, 20], fov: 45 }}
-      onCreated={({ gl }) => {
+      onCreated={(state) => {
+        const { gl } = state;
         gl.info.autoReset = false;
+        // Dev: akses scene dari konsol/skrip ukur (window.__vo.three).
+        if (import.meta.env.DEV) Object.assign((window as unknown as { __vo?: object }).__vo ?? {}, { three: state });
+        setReady(true);
       }}
     >
       {/* FPS turun terus → otomatis pindah ke mode ringan */}
-      <PerformanceMonitor onDecline={() => useGraphics.getState().setQuality("low")} />
+      <PerformanceMonitor onDecline={() => useGraphics.getState().quality === "high" && useGraphics.getState().setQuality("low")} />
+      {flat && <OrthographicCamera makeDefault position={[0, 40, 30]} zoom={28} near={0.1} far={300} />}
       <FpsMeter />
       <color attach="background" args={[BG]} />
-      <fog attach="fog" args={[BG, 40, 80]} />
-      <Lighting high={high} />
-      <Suspense fallback={null}>
-        <Physics gravity={[0, -20, 0]} timeStep="vary">
-          <World />
-          <Player />
-        </Physics>
-        {Object.values(players)
-          .filter((p) => p.floor === floor) // hanya orang di lantai yang sama
-          .map((p) => (
-          <RemotePlayer key={p.id} info={p} />
-        ))}
-      </Suspense>
-      <Effects high={high} />
+      {!flat && <fog attach="fog" args={[BG, 40, 80]} />}
+      <Lighting high={high} flat={flat} />
+      {ready && (
+        <Suspense fallback={null}>
+          <Physics gravity={[0, -20, 0]} timeStep="vary">
+            <World />
+            <Player />
+          </Physics>
+          {Object.values(players)
+            .filter((p) => p.floor === floor) // hanya orang di lantai yang sama
+            .map((p) => (
+            <RemotePlayer key={p.id} info={p} />
+          ))}
+        </Suspense>
+      )}
+      <Effects high={high} flat={flat} />
     </Canvas>
   );
 }

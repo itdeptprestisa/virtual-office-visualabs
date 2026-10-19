@@ -1,6 +1,7 @@
 import { openChatTab, remoteState, sendStatus, sendSummon, showNotice, useNet, type DirUser, type Presence } from "../net";
-import { teleportNear } from "../Player";
+import { teleportNear } from "../actions";
 import { place, t, useT } from "../i18n";
+import { ChatCircleDotsIcon, FootprintsIcon, HandPalmIcon, MapPinIcon, MegaphoneIcon, UsersIcon } from "./icons";
 
 export const STATUS: Record<Presence, { label: string; color: string }> = {
   available: { label: "Tersedia", color: "#3fb26b" },
@@ -19,7 +20,7 @@ function locate(u: DirUser) {
   const s = remoteState.get(u.id);
   if (!s) return;
   teleportNear(s.p[0], s.p[2], u.floor ?? undefined);
-  showNotice(`📍 ${t("Pindah ke dekat {name}", { name: u.name })}${u.zone ? ` (${place(u.zone)})` : ""}${u.floorName ? ` · ${place(u.floorName)}` : ""}`);
+  showNotice(`${t("Pindah ke dekat {name}", { name: u.name })}${u.zone ? ` (${place(u.zone)})` : ""}${u.floorName ? ` · ${place(u.floorName)}` : ""}`, "pin");
 }
 
 /** Daftar anggota: status, lokasi, angkat tangan; DM / cari / panggil. */
@@ -39,7 +40,9 @@ export function MemberPanel({ onClose }: { onClose: () => void }) {
   return (
     <aside className="side-panel">
       <div className="side-head">
-        <b>👥 {t("Anggota")}</b>
+        <b>
+          <UsersIcon /> {t("Anggota")}
+        </b>
         <span className="muted small">
           {t("{n} online · {m} terdaftar", { n: online + 1, m: users.length })}
         </span>
@@ -67,7 +70,11 @@ export function MemberPanel({ onClose }: { onClose: () => void }) {
             <StatusDot status={u.status} />
             <div className="who">
               <div>
-                {u.hand && "✋ "}
+                {u.hand && (
+                  <>
+                    <HandPalmIcon />{" "}
+                  </>
+                )}
                 <b>{u.name}</b> <span className="muted small">@{u.username}</span>
                 {u.role === "admin" && <span className="tag">admin</span>}
                 {u.role === "guest" && <span className="tag">{t("tamu")}</span>}
@@ -81,31 +88,31 @@ export function MemberPanel({ onClose }: { onClose: () => void }) {
             </div>
             <div className="actions">
               <button title={t("Kirim pesan")} onClick={() => openChatTab(`dm:${u.id}`)}>
-                💬
+                <ChatCircleDotsIcon />
               </button>
               {u.online && (
                 <>
                   <button title={t("Pergi ke dekatnya")} onClick={() => locate(u)}>
-                    📍
+                    <MapPinIcon />
                   </button>
                   <button
                     title={following === u.id ? t("Berhenti mengikuti") : t("Ikuti (jalan otomatis di belakangnya)")}
                     className={following === u.id ? "on" : ""}
                     onClick={() => {
                       useNet.setState({ following: following === u.id ? null : u.id });
-                      if (following !== u.id) showNotice(`👣 ${t("Mengikuti {name} — tekan tombol gerak untuk berhenti", { name: u.name })}`);
+                      if (following !== u.id) showNotice(t("Mengikuti {name} — tekan tombol gerak untuk berhenti", { name: u.name }), "follow");
                     }}
                   >
-                    👣
+                    <FootprintsIcon />
                   </button>
                   <button
                     title={t("Panggil ke tempatku")}
                     onClick={() => {
                       sendSummon(u.id);
-                      showNotice(`📣 ${t("{name} dipanggil ke tempatmu", { name: u.name })}`);
+                      showNotice(t("{name} dipanggil ke tempatmu", { name: u.name }), "summon");
                     }}
                   >
-                    📣
+                    <MegaphoneIcon />
                   </button>
                 </>
               )}
@@ -127,7 +134,7 @@ export function SummonPrompt() {
   return (
     <div className="summon">
       <div>
-        📣 <b>{summon.name}</b> {summon.place ? t("memanggilmu ke {place}", { place: place(summon.place) }) : t("memanggilmu")}
+        <MegaphoneIcon /> <b>{summon.name}</b> {summon.place ? t("memanggilmu ke {place}", { place: place(summon.place) }) : t("memanggilmu")}
         {summon.floor !== useNet.getState().floor && ` (${place(summon.floorName)})`}
       </div>
       <div className="row-actions">

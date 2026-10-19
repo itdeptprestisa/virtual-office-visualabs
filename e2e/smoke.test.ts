@@ -15,6 +15,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SERVER_PORT = 31000 + Math.floor(Math.random() * 1000);
 const CLIENT_PORT = SERVER_PORT + 1000;
 const URL_ = `http://localhost:${CLIENT_PORT}`;
+const VIEW = process.env.E2E_VIEW === "3d" ? "3d" : "2d"; // mode tampilan yang diuji (bawaan 2D)
 const CHROME =
   process.env.CHROME_PATH ??
   [
@@ -63,7 +64,14 @@ async function open(lang = "id"): Promise<Page> {
   const p = await ctx.newPage();
   await p.setViewport({ width: 1100, height: 700 });
   p.on("pageerror", (e) => errors.push(e.message));
-  await p.evaluateOnNewDocument((l) => localStorage.setItem("vo-lang", l), lang);
+  await p.evaluateOnNewDocument(
+    (l, v) => {
+      localStorage.setItem("vo-lang", l);
+      localStorage.setItem("vo-view", v);
+    },
+    lang,
+    VIEW,
+  );
   await p.goto(URL_, { waitUntil: "load" });
   await p.waitForSelector(".auth");
   return p;
@@ -111,7 +119,7 @@ test("chat Umum sampai ke orang lain; DM tersimpan", async () => {
 
 test("lantai 2: main Empat Sejajar & Snake; avatar diam selama jendela game terbuka", async () => {
   await ayu.bringToFront();
-  await ayu.evaluate(() => (window as any).__vo.teleport(16.9, 10.6));
+  await ayu.evaluate(() => (window as any).__vo.teleport(31.3, 22.3));
   await ayu.waitForSelector(".lift button");
   await clickText(ayu, ".lift button", "Lantai 2");
   await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().floor === "f2");
@@ -132,7 +140,7 @@ test("lantai 2: main Empat Sejajar & Snake; avatar diam selama jendela game terb
   await ayu.keyboard.press("Escape");
   await ayu.waitForSelector(".c4-board", { hidden: true });
 
-  await ayu.evaluate(() => (window as any).__vo.teleport(-4.5, -21.1)); // depan mesin arcade
+  await ayu.evaluate(() => (window as any).__vo.teleport(-4.5, -42.1)); // depan mesin arcade
   await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().nearGame?.type === "arcade", { timeout: 20_000 });
   await ayu.keyboard.press("KeyF");
   await ayu.waitForSelector(".snake-canvas");
@@ -143,11 +151,11 @@ test("lantai 2: main Empat Sejajar & Snake; avatar diam selama jendela game terb
 });
 
 test("town hall di lantai 1: berdiri di panggung", async () => {
-  await ayu.evaluate(() => (window as any).__vo.teleport(16.9, 10.6));
+  await ayu.evaluate(() => (window as any).__vo.teleport(31.3, 22.3));
   await ayu.waitForSelector(".lift button");
   await clickText(ayu, ".lift button", "Lantai 1");
   await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().floor === "f1");
-  await ayu.evaluate(() => (window as any).__vo.teleport(0, -21));
+  await ayu.evaluate(() => (window as any).__vo.teleport(0, -41));
   await ayu.waitForSelector(".pill.stage", { timeout: 20_000 });
 });
 
@@ -155,6 +163,46 @@ test("tampilan bahasa Inggris", async () => {
   const p = await open("en");
   assert.ok(await p.$$eval(".tabs .tab", (t) => t.some((x) => x.textContent === "Sign up")));
   await p.close();
+});
+
+test("ganti tampilan 2D ↔ 3D: posisi tetap, kembali normal", async () => {
+  await ayu.evaluate(() => (window as any).__vo.teleport(0, 15));
+  await new Promise((r) => setTimeout(r, 500));
+  const before = await ayu.evaluate(() => (window as any).__vo.selfPos.p.map((n: number) => Math.round(n)));
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
+  await new Promise((r) => setTimeout(r, 1000));
+  const after = await ayu.evaluate(() => (window as any).__vo.selfPos.p.map((n: number) => Math.round(n)));
+  assert.deepEqual([after[0], after[2]], [before[0], before[2]]);
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
+});
+
+test("teleport saat tampilan berikutnya masih dimuat tidak hilang", async () => {
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.evaluate(() => import("/src/actions.ts" as string).then((m) => m.teleportTo(-3, 18))); // sebelum renderer baru siap
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
+  await new Promise((r) => setTimeout(r, 1000));
+  const p = await ayu.evaluate(() => (window as any).__vo.selfPos.p.map((n: number) => Math.round(n)));
+  assert.deepEqual([p[0], p[2]], [-3, 18]);
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
+});
+
+test("duduk lalu ganti tampilan: berdiri di titik berdiri kursi, tidak tertinggal di kursi", async () => {
+  const seat = await state(ayu, (s) => s.derived.seats.find((x: any) => x.id && Math.abs(x.z - 16) < 12) ?? s.derived.seats[0]);
+  await ayu.evaluate((x: number, z: number) => (window as any).__vo.teleport(x, z), seat.x + 0.3, seat.z);
+  await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().nearSeat, { timeout: 20_000 });
+  await ayu.keyboard.press("KeyC");
+  await ayu.waitForFunction(() => (window as any).__vo.useNet.getState().sitting === true);
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.equal(await state(ayu, (s) => s.sitting), false);
+  const p = await ayu.evaluate(() => (window as any).__vo.selfPos.p);
+  assert.ok(Math.hypot(p[0] - seat.stand[0], p[2] - seat.stand[1]) < 0.6, `posisi ${p} vs titik berdiri ${seat.stand}`);
+  await clickText(ayu, ".hud-top .pill", "Tampilan");
+  await ayu.waitForFunction(() => typeof (window as any).__vo?.teleport === "function", { timeout: 120_000 });
 });
 
 test("tidak ada error JavaScript di halaman", () => {

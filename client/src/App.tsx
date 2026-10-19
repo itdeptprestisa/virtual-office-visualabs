@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
-import { Scene } from "./Scene";
-import { boot, sendAvatar, sendStatus, useNet } from "./net";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { World2D } from "./world2d/World2D";
+import { useGraphics } from "./graphics";
+import { boot, sendAvatar, sendStatus, showNotice, useNet } from "./net";
+import { LazyBoundary } from "./LazyBoundary";
 import { AvatarEditor } from "./avatar/AvatarEditor";
 import { connectMedia, room, setupPushToTalk, toggleCam, toggleMic, useMedia } from "./media";
 import { ScreenModal, ScreenPanel } from "./ScreenShare";
@@ -17,6 +19,14 @@ import { AdminPanel } from "./ui/AdminPanel";
 import { EditorPanel } from "./ui/EditorPanel";
 import { Joystick } from "./ui/Joystick";
 import { t, useT } from "./i18n";
+
+// Mode 3D (Three.js + Rapier) baru diunduh saat dipilih — mode 2D tidak memuatnya.
+const Scene = lazy(() => import("./Scene").then((m) => ({ default: m.Scene })));
+/** Bagian 3D gagal diunduh (mis. versi lama setelah deploy ulang) → kembali ke 2D, bukan halaman putih. */
+function fallbackTo2D() {
+  useGraphics.getState().setView("2d");
+  showNotice(t("Tampilan 3D gagal dimuat — kembali ke 2D. Muat ulang halaman untuk mencoba lagi."));
+}
 import { ContextActions, HelpPanel, MediaBar, Notice, Toolbar, TopLeft, totalUnread, type Panel } from "./ui/Hud";
 
 // Ubah avatar di tengah permainan; perubahan langsung terlihat oleh semua orang.
@@ -107,6 +117,7 @@ function useRoomBoard() {
 const COMPACT = "(max-width: 720px), (pointer: coarse)";
 
 function Office() {
+  const view = useGraphics((s) => s.view);
   const [panel, setPanel] = useState<Panel>(null);
   const [compact, setCompact] = useState(() => matchMedia(COMPACT).matches);
   useIdleStatus();
@@ -117,13 +128,21 @@ function Office() {
     const mq = matchMedia(COMPACT);
     const on = () => setCompact(mq.matches);
     mq.addEventListener("change", on);
-    if (mq.matches) useNet.setState({ chatOpen: false }); // di HP chat disembunyikan dulu, dibuka lewat 💬
+    if (mq.matches) useNet.setState({ chatOpen: false }); // di HP chat disembunyikan dulu, dibuka lewat tombol chat
     return () => mq.removeEventListener("change", on);
   }, []);
 
   return (
     <div className={compact ? "office compact" : "office"}>
-      <Scene />
+      {view === "2d" ? (
+        <World2D />
+      ) : (
+        <LazyBoundary onError={fallbackTo2D} fallback={null}>
+          <Suspense fallback={<div className="overlay"><p className="muted">{t("Memuat tampilan 3D…")}</p></div>}>
+            <Scene />
+          </Suspense>
+        </LazyBoundary>
+      )}
       <TopLeft />
       <ContextActions />
       <Toolbar panel={panel} setPanel={setPanel} compact={compact} />

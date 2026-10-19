@@ -3,6 +3,7 @@ import { useNet } from "../net";
 import { C4_COLS, C4_ROWS } from "../../../shared/connect4";
 import { c4DropAt, c4Join, c4Leave, c4Reset, closeGame, submitScore, useGames, type ScoreEntry } from "../games";
 import { useT } from "../i18n";
+import { CirclesFourIcon, JoystickIcon, TrophyIcon } from "./icons";
 
 // Jendela game Lantai 2. Selama terbuka, semua tombol keyboard ditangkap di sini (tidak menggerakkan avatar,
 // tidak memicu pintasan lain); Esc menutup.
@@ -36,7 +37,9 @@ export function GameModal() {
     <div className="overlay modal">
       <div className="card game" ref={box} tabIndex={-1}>
         <div className="side-head">
-          <h2>{open.type === "arcade" ? `🕹️ Snake` : `🔴 ${t("Empat Sejajar")}`}</h2>
+          <h2>
+            {open.type === "arcade" ? <JoystickIcon /> : <CirclesFourIcon />} {open.type === "arcade" ? "Snake" : t("Empat Sejajar")}
+          </h2>
           <button className="x" onClick={closeGame} aria-label={t("Tutup")}>
             ×
           </button>
@@ -176,7 +179,9 @@ function Snake({ machine }: { machine: string }) {
           {t("Skor")}: <b>{score}</b>
           {best !== undefined && ` · ${t("Terbaikmu")}: ${best}`}
         </div>
-        <h4>🏆 {t("Papan skor")}</h4>
+        <h4>
+          <TrophyIcon /> {t("Papan skor")}
+        </h4>
         <ol>
           {top.length === 0 && <li className="muted">{t("Belum ada skor. Jadilah yang pertama!")}</li>}
           {top.map((e) => (
@@ -210,7 +215,7 @@ function ConnectFour({ table }: { table: string }) {
     g.result === 3
       ? t("Seri! Papan penuh.")
       : g.result
-        ? `🎉 ${t("{name} menang!", { name: nameOf(g.result) })}`
+        ? t("{name} menang!", { name: nameOf(g.result) })
         : !ready
           ? t("Menunggu pemain kedua…")
           : myTurn
