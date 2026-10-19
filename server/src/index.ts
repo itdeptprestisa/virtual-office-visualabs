@@ -58,6 +58,7 @@ interface Player {
   user: User;
   ws: WebSocket;
   token: string;
+  n: number; // id pendek untuk pesan posisi (state) — lebih hemat dari id akun
   floor: string;
   p: Vec3;
   r: number;
@@ -72,7 +73,12 @@ interface Player {
 
 const PORT = Number(process.env.PORT ?? 2567);
 const TICK_HZ = 15;
-const MAX_PLAYERS = 60;
+// Posisi orang dekat dikirim tiap tick; yang jauh (di luar jarak detail avatar client, LOD_FAR) cukup 5x/detik,
+// yang di lantai lain 1x/detik (tidak digambar, hanya untuk "pindah ke dekat"). Hemat bandwidth saat ramai.
+const NEAR_SYNC = 15; // m
+const FAR_EVERY = 3; // tick → 5x/detik
+const FLOOR_EVERY = TICK_HZ; // tick → 1x/detik
+const MAX_PLAYERS = 100; // samakan dengan room.max_participants LiveKit di docker-compose.yml
 const WORLD_LIMIT = 50;
 const ANIM_COUNT = 7;
 const MAX_UPLOAD = 5 * 1024 * 1024; // 5 MB
@@ -272,7 +278,7 @@ function sendTo(filter: (pl: Player) => boolean, msg: unknown) {
 
 const broadcast = (msg: unknown, exceptId?: string) => sendTo((pl) => pl.id !== exceptId, msg);
 
-const publicView = (pl: Player) => ({ id: pl.id, name: pl.user.name, avatar: pl.user.avatar, floor: pl.floor, p: pl.p, r: pl.r, a: pl.a });
+const publicView = (pl: Player) => ({ id: pl.id, n: pl.n, name: pl.user.name, avatar: pl.user.avatar, floor: pl.floor, p: pl.p, r: pl.r, a: pl.a });
 
 const selfView = (u: User) => ({ id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar, ical: u.ical, guestExp: u.guestExp ?? null, tour: u.tourPending === true });
 
@@ -607,7 +613,7 @@ wss.on("connection", (ws, req) => {
       }
       const floor = layout.floors.some((f) => f.id === msg.floor) ? msg.floor : layout.floors.some((f) => f.id === user.lastFloor) ? user.lastFloor! : firstFloor();
       const spawn = validVec3(msg.p) ?? (floor === user.lastFloor ? user.lastPos : null) ?? randomSpawn();
-      const pl: Player = { id: user.id, user, ws, token, floor, p: spawn, r: 0, a: 0, dirty: false, alive: true, manual: "available", idle: false, hand: false, zone: null };
+      const pl: Player = { id: user.id, user, ws, token, n: nextShortId++, floor, p: spawn, r: 0, a: 0, dirty: false, alive: true, manual: "available", idle: false, hand: false, zone: null };
       pl.zone = zoneAt(pl.floor, pl.p);
       me = pl;
       players.set(pl.id, pl);
@@ -651,6 +657,8 @@ wss.on("connection", (ws, req) => {
 
 function dropPlayer(pl: Player) {
   players.delete(pl.id);
+  movedFar.delete(pl);
+  movedFloor.delete(pl);
   pl.user.lastPos = pl.p;
   pl.user.lastFloor = pl.floor;
   const myDesk = deskOf(pl.id);
@@ -1157,6 +1165,11 @@ setInterval(updateCalendarStatus, 30_000);
 
 // ---------- tick ----------
 
+let tickNo = 0;
+let nextShortId = 1;
+const movedFar = new Set<Player>(); // bergerak sejak kiriman 5x/detik terakhir
+const movedFloor = new Set<Player>(); // bergerak sejak kiriman 1x/detik terakhir
+
 setInterval(() => {
   // Ruangan kosong → kunci pintu terbuka otomatis supaya tidak terkunci selamanya.
   for (const [id, door] of doors) {
@@ -1165,13 +1178,37 @@ setInterval(() => {
       broadcast(worldView());
     }
   }
-  const u: (string | number)[][] = [];
+  tickNo++;
+  const farTick = tickNo % FAR_EVERY === 0;
+  const floorTick = tickNo % FLOOR_EVERY === 0;
+  const moved: Player[] = [];
   for (const pl of players.values()) {
     if (!pl.dirty) continue;
     pl.dirty = false;
-    u.push([pl.id, ...pl.p.map((n) => Math.round(n * 100) / 100), Math.round(pl.r * 100) / 100, pl.a]);
+    moved.push(pl);
+    movedFar.add(pl);
+    movedFloor.add(pl);
   }
-  if (u.length) broadcast({ t: "state", ts: Date.now(), u });
+  if (!moved.length && !(farTick && movedFar.size) && !(floorTick && movedFloor.size)) return;
+  // Satu potongan JSON per pemain, dirangkai per penerima sesuai jarak & lantainya.
+  const enc = new Map<Player, string>();
+  const entry = (pl: Player) => {
+    let e = enc.get(pl);
+    if (!e) enc.set(pl, (e = JSON.stringify([pl.n, ...pl.p.map((n) => Math.round(n * 100) / 100), Math.round(pl.r * 100) / 100, pl.a])));
+    return e;
+  };
+  const head = `{"t":"state","ts":${Date.now()},"u":[`;
+  for (const to of players.values()) {
+    if (to.ws.readyState !== WebSocket.OPEN) continue;
+    const near = (pl: Player) => pl.floor === to.floor && Math.hypot(pl.p[0] - to.p[0], pl.p[2] - to.p[2]) < NEAR_SYNC;
+    const parts: string[] = [];
+    for (const pl of moved) if (pl !== to && near(pl)) parts.push(entry(pl));
+    if (farTick) for (const pl of movedFar) if (pl !== to && pl.floor === to.floor && !near(pl)) parts.push(entry(pl));
+    if (floorTick) for (const pl of movedFloor) if (pl.floor !== to.floor) parts.push(entry(pl));
+    if (parts.length) to.ws.send(head + parts.join(",") + "]}");
+  }
+  if (farTick) movedFar.clear();
+  if (floorTick) movedFloor.clear();
 }, 1000 / TICK_HZ);
 
 // Direktori (status, lokasi) dikirim paling sering sekali per detik — perubahan area terjadi terus saat orang berjalan.

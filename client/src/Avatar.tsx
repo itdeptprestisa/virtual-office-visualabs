@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { CircleGeometry, MeshBasicMaterial, Vector3, type Group } from "three";
+import { Vector3, type Group } from "three";
 import { ANIM } from "./anims";
 import { useNet } from "./net";
 import { AvatarLabel } from "./avatarLabel";
@@ -47,7 +47,6 @@ export function Avatar({ id, name, avatar, getAnim, isSelf }: Props) {
       ) : (
         <Character config={avatar} getAnim={getAnim} handUp={hand} castShadows={!!isSelf} />
       )}
-      {!isSelf && <BlobShadow />}
       <group ref={label} position-y={LABEL_Y}>
         <Html center zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
           <AvatarLabel id={id} name={name} color={color} isSelf={isSelf} far={low} />
@@ -55,11 +54,4 @@ export function Avatar({ id, name, avatar, getAnim, isSelf }: Props) {
       </group>
     </group>
   );
-}
-
-// Bayangan murah untuk avatar orang lain: satu lingkaran gelap lembut di kaki (pengganti shadow map).
-const BLOB_GEO = new CircleGeometry(0.42, 24);
-const BLOB_MAT = new MeshBasicMaterial({ color: "#000000", transparent: true, opacity: 0.22, depthWrite: false });
-function BlobShadow() {
-  return <mesh geometry={BLOB_GEO} material={BLOB_MAT} rotation-x={-Math.PI / 2} position-y={0.012} renderOrder={1} />;
 }

@@ -1,6 +1,7 @@
 # Produksi (Dokploy): app + LiveKit. Isi variabel di .env (lihat .env.example) atau tab Environment Dokploy.
 # Domain & HTTPS dipasang di Dokploy (tab Domains): app → port 2567, livekit → port 7880.
-# Suara/video TIDAK lewat Traefik: port 7882/udp & 7881/tcp wajib dibuka di firewall server.
+# Suara/video TIDAK lewat Traefik: port 7882/udp, 7881/tcp & 3478/udp (TURN) wajib dibuka di firewall server.
+# TURN/TLS (untuk jaringan yang cuma membuka port 443) lewat Traefik: router TCP di label service livekit.
 
 services:
   app:
@@ -22,17 +23,39 @@ services:
     restart: unless-stopped
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # TURN bawaan LiveKit (tidak perlu coturn terpisah):
+      #  - TURN/UDP 3478 → untuk NAT simetris / UDP acak diblok, langsung ke server.
+      #  - TURN/TLS → LiveKit dengar TCP polos di 5349, TLS diputus Traefik di 443 (external_tls),
+      #    LiveKit mengiklankan turns:${TURN_DOMAIN}:443 ke client.
       LIVEKIT_CONFIG: |
         port: 7880
         rtc:
           tcp_port: 7881
           udp_port: 7882
           use_external_ip: ${LIVEKIT_EXTERNAL_IP:-true}
+        room:
+          max_participants: 100
+        turn:
+          enabled: true
+          domain: ${TURN_DOMAIN:?isi TURN_DOMAIN}
+          udp_port: 3478
+          tls_port: 5349
+          external_tls: true
     ports:
       - "7881:7881/tcp"
       - "7882:7882/udp"
+      - "3478:3478/udp"
     expose:
       - "7880"
+      - "5349"
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.office-turn.rule=HostSNI(`${TURN_DOMAIN}`)
+      - traefik.tcp.routers.office-turn.entrypoints=websecure
+      - traefik.tcp.routers.office-turn.tls=true
+      - traefik.tcp.routers.office-turn.tls.certresolver=letsencrypt
+      - traefik.tcp.routers.office-turn.service=office-turn
+      - traefik.tcp.services.office-turn.loadbalancer.server.port=5349
 
 volumes:
   office-data:

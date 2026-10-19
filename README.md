@@ -2,7 +2,7 @@
 
 A 2D/3D virtual office in the browser, in the spirit of Gather and ZEP — walk around as a customizable avatar,
 talk to whoever is near you, drop into rooms for private meetings, and gather everyone for an all-hands on stage.
-Built and load-tested for teams of ~50 people.
+Built and load-tested for up to 100 people online at once (the server's cap).
 
 ![Office overview](docs/screenshots/overview.png)
 
@@ -75,16 +75,25 @@ has a tooltip explaining what it does.
   stages and floors — changes are saved and pushed to everyone live.
 - Data is stored in `server/data/db.json` and **backed up automatically** (on start and every 6 hours, last 20 kept in `server/data/backups/`).
 
-**Performance** — remote avatars use cheap blob shadows and switch to a low-detail model beyond ~14 m; the directory is
-throttled to once per second. Measured with 50 simulated users walking around (before the detailed furniture below): **855 draw calls / 54k triangles per
+**Performance** — no shadows at all in 3D (no shadow map, no blob shadows, no ambient occlusion); remote avatars switch
+to a low-detail model beyond ~14 m; the directory is throttled to once per second. Positions are sent per viewer by
+distance: people within 15 m 15×/s, farther people on the same floor 5×/s, other floors 1×/s (with short numeric ids),
+and remote avatars interpolate at the pace their updates arrive. Measured with 50 simulated users walking around (before the detailed furniture below): **855 draw calls / 54k triangles per
 frame** (down from 3,671 / 748k), **~27 KB/s** downstream per client, and ~5% CPU on the server. An automatic
 low-quality mode kicks in when the frame rate drops. Touch joystick on mobile. The 2D view loads ~280 KB (gzip)
 instead of ~1.5 MB and draws the static floor plan once into a cached layer, redrawing only avatars and live items
 each frame.
 
+**Load test, 100 people** (99 bots walking non-stop, all crowded around the spawn area, plus one real browser on an
+Apple M1): game server ~5–11% of one core and ~85 MB RAM; **~37 KB/s** downstream per client (~3.7 MB/s out of the
+server for 100 people, before audio/video; idle people send nothing, so real offices use far less); 2D and 3D (high
+quality) both at **~60 FPS** with 99 avatars in view; the 101st person is turned away. LiveKit, same config as
+`docker-compose.yml`: a town hall with 4 publishers (2 cameras + 2 mics) and 96 listeners delivered all 384 tracks
+with 0% packet loss (~25 Mbit/s out, ~260 kbit/s per listener); 100 open mics at once also held; participant 101 is
+refused by LiveKit (`room.max_participants`).
+
 The detailed 3D furniture stays cheap: static pieces are merged per material into a few meshes, slender parts get
-plain boxes instead of bevels, segment counts scale with size, and furniture doesn't cast real-time shadows (avatar
-and wall shadows still fall on it). Once merged, the thousands of hidden source pieces are skipped by the per-frame
+plain boxes instead of bevels, and segment counts scale with size. Once merged, the thousands of hidden source pieces are skipped by the per-frame
 matrix update (it cost ~2–3 ms per pass while walking). Walking through the busy workspace on an Apple M1 runs at
 ~58–60 FPS, on par with the old box furniture, for ~10 KB more download (gzip).
 
@@ -120,16 +129,19 @@ LiveKit's public dev keys.
 `docker-compose.yml` runs two services: **app** (game server that also serves the built web client) and **livekit**
 (audio/video). Dokploy's Traefik provides the domains and HTTPS.
 
-1. **DNS** — point two subdomains at the server's public IP, e.g. `office.example.com` and `livekit.example.com`.
-2. **Firewall** — open **UDP 7882** and **TCP 7881** to the internet (audio/video goes straight to the server, not
+1. **DNS** — point three subdomains at the server's public IP, e.g. `office.example.com`, `livekit.example.com` and
+   `turn.example.com`.
+2. **Firewall** — open **UDP 7882**, **TCP 7881** and **UDP 3478** (TURN) to the internet (audio/video goes straight to the server, not
    through Traefik). On a cloud VPS open them in the provider's firewall / security group too, not only `ufw`.
    If these are closed, people can sign in but won't hear or see each other.
 3. **Dokploy** — create a *Compose* service from this repo. In **Environment**, set the variables from
-   [`.env.example`](.env.example) (`LIVEKIT_DOMAIN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`; generate the key and
-   secret as described there).
+   [`.env.example`](.env.example) (`LIVEKIT_DOMAIN`, `TURN_DOMAIN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`; generate the key
+   and secret as described there).
 4. **Domains** — add `office.example.com` → service `app`, port `2567`, and `livekit.example.com` → service
    `livekit`, port `7880`, both with HTTPS (Let's Encrypt). If your Dokploy version doesn't attach Compose services to
-   its network automatically, add the external `dokploy-network` to both services.
+   its network automatically, add the external `dokploy-network` to both services. Don't add `turn.example.com` here:
+   the `livekit` service's Traefik labels already route it (TCP, TLS on 443, certificate from Let's Encrypt), so
+   `livekit` must be on `dokploy-network` for TURN/TLS to work.
 5. Deploy, open `https://office.example.com` and register — the first account becomes admin.
 
 Data (accounts, chat, uploads, backups) lives in the `office-data` volume (`/data` in the container), so it survives
@@ -138,8 +150,14 @@ redeploys. The app refuses to start in production without real LiveKit credentia
 Behind Traefik the server reads the client IP from `X-Forwarded-For` (`TRUST_PROXY=1`) for sign-in rate limits:
 5 failed attempts per username per 15 minutes; per-IP limits are generous because a whole office may share one IP.
 
-Networks that allow nothing but port 443 (some corporate or hotel Wi-Fi) need TURN over TLS, which this setup doesn't
-include yet.
+**NAT relay (TURN)** — LiveKit's built-in TURN server is enabled, so no separate coturn is needed. Most people connect
+directly (UDP 7882, falling back to TCP 7881); when that fails — symmetric NAT, or networks that block everything but
+port 443 (some corporate or hotel Wi-Fi) — media is relayed through TURN: **TURN/UDP on 3478** straight to the server,
+and **TURN/TLS on 443** through Traefik (`turn.example.com`, TLS terminated by Traefik and forwarded to LiveKit's
+port 5349). Relayed traffic flows through your server, so it costs bandwidth.
+
+**Capacity** — up to **100 people** online at once (`MAX_PLAYERS` in `server/src/index.ts`, matching
+`room.max_participants` in `docker-compose.yml`); the 101st sees "office is full". Change both together.
 
 **Production preview locally** (Node ≥ 22): `npm run build`, start `livekit-server` with real keys, then run
 `NODE_ENV=production LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=… LIVEKIT_API_SECRET=… npm start -w server`
@@ -155,7 +173,7 @@ npm run test:e2e       # real browser (needs Chrome/Chromium, or set CHROME_PATH
 - `shared/layout.test.ts` — floor plan, areas, stage, doors, seats, elevators, validation.
 - `server/src/server.test.ts` — starts a real server and checks auth, invite codes, area-scoped chat, DMs, door locks,
   whiteboard privacy, floors & stage, passwords, guest links, bookings, uploads, reactions, search, screens, and the
-  first-run tour flag.
+  first-run tour flag, and distance-tiered position updates.
 - `server/src/ratelimit.test.ts` — sign-in attempt limiter.
 - `server/src/migrate.test.ts` — one-time data migrations (older saved floor plans get the default decorations once).
 - `client/src/controller.test.ts` — shared avatar logic (input, sitting, doors, focus desks, zones, position sync).

@@ -507,3 +507,36 @@ test("tur pertama: akun baru ditandai perlu tur sampai selesai/dilewati (tersimp
   assert.equal(again.user.tour, false);
   c2.close();
 });
+
+test("posisi: pakai id pendek, orang dekat tiap tick, jauh lebih jarang, lantai lain 1x/detik, posisi sendiri tidak dipantulkan", async () => {
+  const pantau = await member("pantau");
+  const dekat = await member("dekat");
+  const jauh = await member("jauh");
+  const atas = await member("atas");
+  await pantau.c.enter([0, 0, 15]);
+  const n: Record<string, number> = {};
+  for (const x of [dekat, jauh, atas]) {
+    await x.c.enter([0, 0, 15]);
+    n[x.id] = (await pantau.c.wait("join", (m) => m.player.id === x.id)).player.n;
+  }
+  atas.c.send({ t: "floor", floor: "f2", p: [0, 0, 15] });
+  await sleep(300);
+  pantau.c.drain("state");
+  const spots: [typeof dekat, number][] = [[dekat, 2], [jauh, -15], [atas, 2]]; // dekat 2 m, jauh 30 m, atas: lantai 2
+  let k = 0;
+  const walk = setInterval(() => {
+    k++;
+    for (const [x, z] of spots) x.c.move([k % 2 ? 0.1 : 0, 0, z]);
+    pantau.c.move([0, 0, 15]);
+  }, 1000 / 15);
+  await sleep(3000);
+  clearInterval(walk);
+  const entries: any[][] = pantau.c.inbox.filter((m) => m.t === "state").flatMap((m) => m.u);
+  const count = (id: number) => entries.filter((e) => e[0] === id).length;
+  assert.ok(count(n[dekat.id]) >= 35, `dekat: ${count(n[dekat.id])} update`); // ±45 (15x/detik)
+  assert.ok(count(n[jauh.id]) >= 10 && count(n[jauh.id]) <= 20, `jauh: ${count(n[jauh.id])} update`); // ±15 (5x/detik)
+  assert.ok(count(n[atas.id]) >= 2 && count(n[atas.id]) <= 4, `lantai lain: ${count(n[atas.id])} update`); // ±3 (1x/detik)
+  // Hanya id pendek milik tiga orang lain — posisi "pantau" sendiri tidak dikirim balik.
+  assert.ok(entries.every((e) => Object.values(n).includes(e[0])), "hanya id pendek orang lain");
+  for (const x of [pantau, dekat, jauh, atas]) x.c.close();
+});

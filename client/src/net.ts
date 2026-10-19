@@ -219,6 +219,7 @@ export interface RemoteState {
   r: number;
   a: number;
   buf: Snapshot[];
+  gap: number; // rata-rata jarak antar-paket (ms) — orang jauh dikirim lebih jarang, lihat interp.ts
 }
 export const remoteState = new Map<string, RemoteState>();
 
@@ -229,12 +230,19 @@ const BUFFER_SIZE = 20;
 // Selisih jam server → jam lokal, diambil yang terkecil (= paket yang paling cepat sampai) supaya jitter jaringan tidak ikut.
 let clockOffset = Infinity;
 
+// Id pendek (n) di pesan state → id akun; diisi dari welcome & join.
+const shortIds = new Map<number, string>();
+
 function pushSnapshot(id: string, p: Vec3, r: number, a: number, t: number) {
   const prev = remoteState.get(id);
   const buf = prev?.buf ?? [];
+  const last = buf[buf.length - 1];
+  // Jeda panjang (orang diam lalu jalan lagi) tidak dihitung — cuma irama kiriman yang sedang berjalan.
+  const dt = last ? t - last.t : 0;
+  const gap = prev && dt > 0 && dt < 1500 ? prev.gap * 0.8 + dt * 0.2 : prev?.gap ?? 1000 / 15;
   buf.push({ t, p, r });
   if (buf.length > BUFFER_SIZE) buf.shift();
-  remoteState.set(id, { p, r, a, buf });
+  remoteState.set(id, { p, r, a, buf, gap });
 }
 
 /** Terapkan denah (dari server, atau perubahan lokal editor sebelum dikirim). */
@@ -404,8 +412,10 @@ function handle(msg: any) {
       break;
     case "welcome": {
       remoteState.clear();
+      shortIds.clear();
       const players: Record<string, PlayerInfo> = {};
       for (const pl of msg.players) {
+        shortIds.set(pl.n, pl.id);
         players[pl.id] = { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar), floor: pl.floor };
         pushSnapshot(pl.id, pl.p, pl.r, pl.a, performance.now());
       }
@@ -432,12 +442,14 @@ function handle(msg: any) {
       break;
     case "join": {
       const pl = msg.player;
+      shortIds.set(pl.n, pl.id);
       pushSnapshot(pl.id, pl.p, pl.r, pl.a, performance.now());
       useNet.setState((s) => ({ players: { ...s.players, [pl.id]: { id: pl.id, name: pl.name, avatar: sanitizeAvatar(pl.avatar), floor: pl.floor } } }));
       break;
     }
     case "leave": {
       remoteState.delete(msg.id);
+      for (const [n, id] of shortIds) if (id === msg.id) shortIds.delete(n);
       useNet.setState((s) => {
         const { [msg.id]: _, ...players } = s.players;
         return { players };
@@ -504,8 +516,9 @@ function handle(msg: any) {
       const selfId = useNet.getState().selfId;
       clockOffset = Math.min(clockOffset, performance.now() - msg.ts);
       const t = msg.ts + clockOffset;
-      for (const [id, x, y, z, r, a] of msg.u) {
-        if (id === selfId) continue;
+      for (const [n, x, y, z, r, a] of msg.u) {
+        const id = shortIds.get(n);
+        if (!id || id === selfId) continue;
         pushSnapshot(id, [x, y, z], r, a, t);
       }
       break;

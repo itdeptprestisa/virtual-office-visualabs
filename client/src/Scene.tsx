@@ -1,14 +1,13 @@
 import { Suspense, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Environment, Lightformer, OrthographicCamera, PerformanceMonitor } from "@react-three/drei";
-import { Bloom, EffectComposer, N8AO, SMAA, ToneMapping, Vignette } from "@react-three/postprocessing";
+import { Bloom, EffectComposer, SMAA, ToneMapping, Vignette } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import { Physics } from "@react-three/rapier";
 import { World } from "./World";
 import { Player } from "./Player";
 import { RemotePlayer } from "./RemotePlayer";
 import { useNet } from "./net";
-import { WORLD } from "../../shared/layout";
 import { useGraphics } from "./graphics";
 import { PAL } from "./world2d/palette";
 
@@ -36,12 +35,9 @@ function FpsMeter() {
 }
 
 const BG = PAL.bg; // abu dingin (palet B), bukan krem
-// Kotak bayangan (berpusat di titik 0,0 tempat cahaya mengarah) menjangkau pojok gedung terjauh.
-const SHADOW_EXTENT = Math.max(...[WORLD.minX, WORLD.maxX].flatMap((x) => [WORLD.minZ, WORLD.maxZ].map((z) => Math.hypot(x, z)))) + 2;
 
 // Cahaya lingkungan dibangkitkan dari "lampu" virtual (tanpa unduh HDR): jendela utara + plafon + lampu hangat.
-function Lighting({ high, flat }: { high: boolean; flat: boolean }) {
-  const shadowSize = high ? 2048 : 1024;
+function Lighting({ flat }: { flat: boolean }) {
   if (flat) {
     // Tanpa pantulan lingkungan & bayangan: langit-tanah lebih terang supaya warna tetap hidup.
     return (
@@ -54,19 +50,7 @@ function Lighting({ high, flat }: { high: boolean; flat: boolean }) {
   return (
     <>
       <hemisphereLight args={["#ffffff", "#b8bfc8", 0.35]} />
-      <directionalLight
-        position={[-12, 20, 8]}
-        intensity={2.6}
-        color="#fffaf2"
-        castShadow
-        shadow-mapSize={[shadowSize, shadowSize]}
-        shadow-camera-left={-SHADOW_EXTENT}
-        shadow-camera-right={SHADOW_EXTENT}
-        shadow-camera-top={SHADOW_EXTENT}
-        shadow-camera-bottom={-SHADOW_EXTENT}
-        shadow-bias={-0.0005}
-        shadow-normalBias={0.02}
-      />
+      <directionalLight position={[-12, 20, 8]} intensity={2.6} color="#fffaf2" />
       <Environment resolution={128} frames={1} environmentIntensity={0.45}>
         <Lightformer form="rect" intensity={2.5} color="#e3f1ff" position={[0, 6, -16]} scale={[40, 6, 1]} />
         <Lightformer form="rect" intensity={1.2} position={[0, 12, 0]} rotation-x={Math.PI / 2} scale={[40, 30, 1]} />
@@ -88,7 +72,6 @@ function Effects({ high, flat }: { high: boolean; flat: boolean }) {
   }
   return (
     <EffectComposer multisampling={0}>
-      <N8AO halfRes aoRadius={1.2} distanceFalloff={0.6} intensity={2.2} color="#262b36" />
       <Bloom mipmapBlur luminanceThreshold={0.9} intensity={0.45} />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
       <SMAA />
@@ -110,7 +93,7 @@ export function Scene() {
 
   return (
     <Canvas
-      shadows={flat ? false : "percentage"}
+      shadows={false} // tanpa bayangan sama sekali (shadow map paling mahal saat ramai) — demi performa
       dpr={high ? [1, 1.5] : 1}
       gl={{ antialias: false }}
       camera={{ position: [0, 12, 20], fov: 45 }}
@@ -128,7 +111,7 @@ export function Scene() {
       <FpsMeter />
       <color attach="background" args={[BG]} />
       {!flat && <fog attach="fog" args={[BG, 40, 80]} />}
-      <Lighting high={high} flat={flat} />
+      <Lighting flat={flat} />
       {ready && (
         <Suspense fallback={null}>
           <Physics gravity={[0, -20, 0]} timeStep="vary">
