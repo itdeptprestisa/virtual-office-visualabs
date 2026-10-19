@@ -14,6 +14,8 @@ Built and load-tested for teams of ~50 people.
 | **Zoom in** for a third-person view; zoom out for the bird's-eye view. | **Members & presence**: status, floor and area of everyone; DMs, locate, follow, summon. |
 | ![Avatar editor](docs/screenshots/avatar-editor.png) | ![CEO office with executive chair, sofas and leather guest chairs](docs/screenshots/executive-office.png) |
 | **Avatar editor**: body, skin tone, hair or hijab, outfit, colors, glasses, hats — semi-realistic proportions and face in 3D. | **Executive offices**: high-back leather executive chair, sofa corner and leather guest chairs for managers and C-level. |
+| ![The whole floor in the 2D view](docs/screenshots/overview-2d.png) | ![Avatar editor with the 2D preview](docs/screenshots/avatar-editor-2d.png) |
+| **2D view** (default): the light top-down office; zoomed all the way out the whole floor fits on screen. | **2D avatar preview**: in the 2D view the editor shows the 2D avatar, turning through all four directions. |
 
 The UI is available in **English and Indonesian** (switch on the sign-in screen or in Settings).
 
@@ -29,7 +31,8 @@ layouts keep it.
 
 **Two views** — a light, illustrated **2D** top-down view (default; plain Canvas 2D, no WebGL download) and the full
 **3D** view (Three.js + Rapier, loaded only when picked). Switch any time with the **View** pill or in Settings —
-position, chat and calls stay as they are. Both views share the same game logic and collision sizes.
+position, chat and calls stay as they are. Both views share the same game logic and collision sizes. The avatar
+editor previews the avatar in whichever view is active (a turning 2D figure, or a rotatable 3D model).
 
 **Spatial audio & video (LiveKit)**
 - **Areas** — rooms (glass walls + door), open areas (lounge, pantry, rooftop) and every desk. Everyone in the same

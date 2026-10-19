@@ -92,6 +92,11 @@ export function drawAvatar(g: CanvasRenderingContext2D, a: AvatarConfig, x: numb
   });
   // kepala
   const hy = -24;
+  // Rambut panjang/bob/kuncir bagian belakang: dari depan & samping berada di balik kepala (digambar lebih dulu,
+  // membingkai wajah), dari belakang menutupi kepala.
+  const longHair = !a.hijab && (a.hair === "long" || a.hair === "bob" || a.hair === "ponytail");
+  const backHair = () => rr(g, -23, hy - 6, 46, a.hair === "long" ? 40 : a.hair === "bob" ? 28 : 22, a.hairColor, 12);
+  if (longHair && dir !== "u") backHair();
   if (a.hijab) {
     rr(g, -24, hy - 22, 48, 48, a.hijabColor, 22);
     rr(g, -16, -6, 32, 8, a.hijabColor, 4);
@@ -106,7 +111,7 @@ export function drawAvatar(g: CanvasRenderingContext2D, a: AvatarConfig, x: numb
   // rambut
   if (!a.hijab && a.hair !== "none") {
     const hc = a.hairColor;
-    if (a.hair === "long" || a.hair === "bob" || a.hair === "ponytail") rr(g, -23, hy - 6, 46, a.hair === "long" ? 40 : a.hair === "bob" ? 28 : 22, hc, 12);
+    if (longHair && dir === "u") backHair();
     if (dir === "u") circ(g, 0, hy, 23, hc);
     else {
       g.fillStyle = hc;

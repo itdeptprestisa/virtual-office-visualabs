@@ -55,3 +55,22 @@ test("bayangan furnitur tetap ada berapa pun rotasinya (blur dari skala transfor
     assert.ok(Math.abs(blur - 0.12 * 48) < 1e-9, `a=${a} b=${b}: blur ${blur}`);
   }
 });
+
+test("rambut panjang/bob/kuncir tidak menutupi wajah: tampak depan & samping rambut belakang digambar sebelum kepala", () => {
+  for (const hair of ["long", "bob", "ponytail"] as const)
+    for (const facing of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+      // Catat warna isi setiap kali sesuatu di-fill.
+      const fills: string[] = [];
+      const target: Record<string, unknown> = { canvas: { width: 100, height: 100 } };
+      const g = new Proxy(target, {
+        get: (t, k) => (k in t ? t[k as string] : k === "fill" ? () => fills.push(String(t.fillStyle)) : () => undefined),
+        set: (t, k, v) => ((t[k as string] = v), true),
+      }) as unknown as CanvasRenderingContext2D;
+      const a = { ...randomAvatar(), hijab: false, hair, hairColor: "#123456", skin: "#fedcba", hat: "none" as const };
+      drawAvatar(g, a, 0, 0, facing, ANIM.idle, 0, false);
+      const firstHair = fills.indexOf(a.hairColor);
+      const head = fills.lastIndexOf(a.skin); // kepala = isi warna kulit terakhir (tangan digambar lebih dulu)
+      if (facing === Math.PI) assert.ok(fills.lastIndexOf(a.hairColor) > head, `${hair} tampak belakang: rambut menutupi kepala`);
+      else assert.ok(firstHair < head, `${hair} arah ${facing.toFixed(2)}: rambut belakang digambar sesudah kepala (menutupi wajah)`);
+    }
+});
