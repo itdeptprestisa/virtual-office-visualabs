@@ -132,17 +132,17 @@ LiveKit's public dev keys.
 
 1. **DNS** — point three subdomains at the server's public IP, e.g. `office.example.com`, `livekit.example.com` and
    `turn.example.com`.
-2. **Firewall** — open **UDP 7882**, **TCP 7881** and **UDP 3478** (TURN) to the internet (audio/video goes straight to the server, not
-   through Traefik). On a cloud VPS open them in the provider's firewall / security group too, not only `ufw`.
+2. **Firewall** — open **TCP `RTC_TCP_PORT`**, **UDP `RTC_UDP_PORT`** and **UDP `TURN_UDP_PORT`** (TURN) to the internet
+   (defaults `17881`, `17882`, `13478`; audio/video goes straight to the server, not through Traefik). On a cloud VPS
+   open them in the provider's firewall / security group too, not only `ufw`.
    If these are closed, people can sign in but won't hear or see each other.
 3. **Dokploy** — create a *Compose* service from this repo. In **Environment**, set the variables from
-   [`.env.example`](.env.example) (`LIVEKIT_DOMAIN`, `TURN_DOMAIN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`; generate the key
-   and secret as described there).
-4. **Domains** — add `office.example.com` → service `app`, port `2567`, and `livekit.example.com` → service
-   `livekit`, port `7880`, both with HTTPS (Let's Encrypt). If your Dokploy version doesn't attach Compose services to
-   its network automatically, add the external `dokploy-network` to both services. Don't add `turn.example.com` here:
-   the `livekit` service's Traefik labels already route it (TCP, TLS on 443, certificate from Let's Encrypt), so
-   `livekit` must be on `dokploy-network` for TURN/TLS to work.
+   [`.env.example`](.env.example) (`APP_DOMAIN`, `LIVEKIT_DOMAIN`, `TURN_DOMAIN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`;
+   generate the key and secret as described there).
+4. **Domains** — nothing to add in Dokploy's Domains tab: Traefik labels in `docker-compose.yml` route `APP_DOMAIN` → app
+   `:2567`, `LIVEKIT_DOMAIN` → livekit `:7880` and `TURN_DOMAIN` (TCP, TLS on 443) → livekit `:5349`, all with Let's
+   Encrypt. Both services join the external `dokploy-network`. When running several instances on one server, give
+   each its own `ROUTER_PREFIX` and ports — router names and host ports must be unique.
 5. Deploy, open `https://office.example.com` and register — the first account becomes admin.
 
 Data (accounts, chat, uploads, backups) lives in the `office-data` volume (`/data` in the container), so it survives

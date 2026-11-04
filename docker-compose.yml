@@ -1,6 +1,10 @@
 # Produksi (Dokploy): app + LiveKit. Isi variabel di .env (lihat .env.example) atau tab Environment Dokploy.
-# Domain & HTTPS dipasang di Dokploy (tab Domains): app → port 2567, livekit → port 7880.
-# Suara/video TIDAK lewat Traefik: port 7882/udp, 7881/tcp & 3478/udp (TURN) wajib dibuka di firewall server.
+# Domain & HTTPS sudah diatur lewat label Traefik di bawah (APP_DOMAIN, LIVEKIT_DOMAIN, TURN_DOMAIN) —
+# tab Domains Dokploy tidak perlu diisi.
+# Suara/video TIDAK lewat Traefik: port RTC_TCP_PORT/tcp, RTC_UDP_PORT/udp & TURN_UDP_PORT/udp wajib dibuka di firewall.
+# Port di dalam container = port host (LiveKit mengiklankan port internalnya ke client), jadi cukup ganti nilai env-nya.
+# Bawaan port & ROUTER_PREFIX diset untuk Visualabs supaya tidak bentrok dengan instance lain di server yang sama
+# (play.prestisa.com memakai 7881/7882/3478 dan router "office-turn").
 # TURN/TLS (untuk jaringan yang cuma membuka port 443) lewat Traefik: router TCP di label service livekit.
 
 services:
@@ -17,6 +21,21 @@ services:
       - office-data:/data
     expose:
       - "2567"
+    mem_limit: 512m
+    cpus: 1
+    networks: [dokploy-network, default]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app-web.rule=Host(`${APP_DOMAIN:?isi APP_DOMAIN}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app-web.entrypoints=web
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app-web.service=${ROUTER_PREFIX:-visualabs}-app
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app.rule=Host(`${APP_DOMAIN}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app.entrypoints=websecure
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app.tls.certresolver=letsencrypt
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-app.service=${ROUTER_PREFIX:-visualabs}-app
+      - traefik.http.services.${ROUTER_PREFIX:-visualabs}-app.loadbalancer.server.port=2567
 
   livekit:
     image: livekit/livekit-server:v1.13.9
@@ -24,38 +43,55 @@ services:
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
       # TURN bawaan LiveKit (tidak perlu coturn terpisah):
-      #  - TURN/UDP 3478 → untuk NAT simetris / UDP acak diblok, langsung ke server.
+      #  - TURN/UDP → untuk NAT simetris / UDP acak diblok, langsung ke server.
       #  - TURN/TLS → LiveKit dengar TCP polos di 5349, TLS diputus Traefik di 443 (external_tls),
       #    LiveKit mengiklankan turns:${TURN_DOMAIN}:443 ke client.
       LIVEKIT_CONFIG: |
         port: 7880
         rtc:
-          tcp_port: 7881
-          udp_port: 7882
+          tcp_port: ${RTC_TCP_PORT:-17881}
+          udp_port: ${RTC_UDP_PORT:-17882}
           use_external_ip: ${LIVEKIT_EXTERNAL_IP:-true}
         room:
           max_participants: 100
         turn:
           enabled: true
           domain: ${TURN_DOMAIN:?isi TURN_DOMAIN}
-          udp_port: 3478
+          udp_port: ${TURN_UDP_PORT:-13478}
           tls_port: 5349
           external_tls: true
     ports:
-      - "7881:7881/tcp"
-      - "7882:7882/udp"
-      - "3478:3478/udp"
+      - "${RTC_TCP_PORT:-17881}:${RTC_TCP_PORT:-17881}/tcp"
+      - "${RTC_UDP_PORT:-17882}:${RTC_UDP_PORT:-17882}/udp"
+      - "${TURN_UDP_PORT:-13478}:${TURN_UDP_PORT:-13478}/udp"
     expose:
       - "7880"
       - "5349"
+    mem_limit: 1g
+    cpus: 2
+    networks: [dokploy-network, default]
     labels:
       - traefik.enable=true
-      - traefik.tcp.routers.office-turn.rule=HostSNI(`${TURN_DOMAIN}`)
-      - traefik.tcp.routers.office-turn.entrypoints=websecure
-      - traefik.tcp.routers.office-turn.tls=true
-      - traefik.tcp.routers.office-turn.tls.certresolver=letsencrypt
-      - traefik.tcp.routers.office-turn.service=office-turn
-      - traefik.tcp.services.office-turn.loadbalancer.server.port=5349
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit-web.rule=Host(`${LIVEKIT_DOMAIN}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit-web.entrypoints=web
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit-web.service=${ROUTER_PREFIX:-visualabs}-livekit
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit.rule=Host(`${LIVEKIT_DOMAIN}`)
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit.entrypoints=websecure
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit.tls.certresolver=letsencrypt
+      - traefik.http.routers.${ROUTER_PREFIX:-visualabs}-livekit.service=${ROUTER_PREFIX:-visualabs}-livekit
+      - traefik.http.services.${ROUTER_PREFIX:-visualabs}-livekit.loadbalancer.server.port=7880
+      - traefik.tcp.routers.${ROUTER_PREFIX:-visualabs}-turn.rule=HostSNI(`${TURN_DOMAIN}`)
+      - traefik.tcp.routers.${ROUTER_PREFIX:-visualabs}-turn.entrypoints=websecure
+      - traefik.tcp.routers.${ROUTER_PREFIX:-visualabs}-turn.tls=true
+      - traefik.tcp.routers.${ROUTER_PREFIX:-visualabs}-turn.tls.certresolver=letsencrypt
+      - traefik.tcp.routers.${ROUTER_PREFIX:-visualabs}-turn.service=${ROUTER_PREFIX:-visualabs}-turn
+      - traefik.tcp.services.${ROUTER_PREFIX:-visualabs}-turn.loadbalancer.server.port=5349
 
 volumes:
   office-data:
+
+networks:
+  dokploy-network:
+    external: true
